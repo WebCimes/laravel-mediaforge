@@ -1,0 +1,61 @@
+{
+    "$schema": "https://getcomposer.org/schema.json",
+    "name": "webcimes/laravel-mediaforge",
+    "description": "Laravel file & image upload service with multi-format processing (resize, convert, watermark, text overlay).",
+    "keywords": [
+        "laravel",
+        "image",
+        "upload",
+        "resize",
+        "intervention",
+        "file"
+    ],
+    "type": "library",
+    "license": "MIT",
+    "authors": [
+        {
+            "name": "webcimes",
+            "email": "contact@webcimes.com",
+            "homepage": "https://webcimes.com"
+        }
+    ],
+    "require": {
+        "php": "^8.2",
+        "illuminate/contracts": "^11.0|^12.0|^13.0",
+        "illuminate/support": "^11.0|^12.0|^13.0",
+        "intervention/image": "^3.0"
+    },
+    "require-dev": {
+        "orchestra/testbench": "^9.0|^10.0|^11.0",
+        "phpunit/phpunit": "^11.0|^12.0|^13.0"
+    },
+    "autoload": {
+        "psr-4": {
+            "Webcimes\\LaravelMediaforge\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Webcimes\\LaravelMediaforge\\Tests\\": "tests/"
+        }
+    },
+    "extra": {
+        "laravel": {
+            "providers": [
+                "Webcimes\\LaravelMediaforge\\MediaForgeServiceProvider"
+            ],
+            "aliases": {
+                "MediaForge": "Webcimes\\LaravelMediaforge\\Facades\\MediaForge"
+            }
+        }
+    },
+    "suggest": {
+        "ext-imagick": "Recommended: better image quality, native AVIF/HEIC support (use driver = imagick)",
+        "intervention/image-driver-vips": "Optional: fastest processing, lowest memory usage (use driver = vips)"
+    },
+    "config": {
+        "sort-packages": true
+    },
+    "minimum-stability": "stable",
+    "prefer-stable": true
+}
