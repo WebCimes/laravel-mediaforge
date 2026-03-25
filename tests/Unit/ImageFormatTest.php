@@ -147,4 +147,32 @@ class ImageFormatTest extends TestCase
 
         $this->assertSame(['focal' => 'top'], $config['customAttributes']);
     }
+
+    public function test_alt_stored_and_retrieved(): void
+    {
+        $format = ImageFormat::make('default')->alt('Hero image');
+
+        $this->assertSame('Hero image', $format->getAlt());
+    }
+
+    public function test_alt_serialised_in_config_array(): void
+    {
+        $config = ImageFormat::make('default')->alt('My photo')->toConfigArray();
+
+        $this->assertSame('My photo', $config['alt']);
+    }
+
+    public function test_alt_absent_from_config_array_when_not_set(): void
+    {
+        $config = ImageFormat::make('default')->toConfigArray();
+
+        $this->assertArrayNotHasKey('alt', $config);
+    }
+
+    public function test_alt_rebuilt_from_config_array(): void
+    {
+        $rebuilt = ImageFormat::fromConfigArray('default', ['alt' => 'Rebuilt alt']);
+
+        $this->assertSame('Rebuilt alt', $rebuilt->getAlt());
+    }
 }

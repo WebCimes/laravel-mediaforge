@@ -70,26 +70,27 @@ $product->update(['cover' => $imageData]);
 // $imageData:
 [
     'default' => [
-        'disk'     => 'public',
-        'path'     => 'products/my-cover_01jq8z.../default.webp',
-        'width'    => 1920,
-        'height'   => 1080,
-        'alt'      => 'my-cover',
-        '_config'  => [...], // stored for regeneration
+        'disk'   => 'public',
+        'path'   => 'products/my-cover_01jq8z.../default.webp',
+        'width'  => 1920,
+        'height' => 1080,
+        'alt'    => 'my-cover',
     ],
     'thumb' => [
-        'disk'  => 'public',
-        'path'  => 'products/my-cover_01jq8z.../thumb.webp',
-        'width' => 400,
-        'height'=> 300,
-        'alt'   => 'my-cover',
-        '_config' => [...],
+        'disk'             => 'public',
+        'path'             => 'products/my-cover_01jq8z.../thumb.webp',
+        'width'            => 400,
+        'height'           => 300,
+        'alt'              => 'my-cover',
+        // 'customAttributes' only present when defined via ->customAttributes([...])
+        'customAttributes' => ['role' => 'thumbnail'],
     ],
 ]
 ```
 
 ## ImageFormat reference
 
+<!-- prettier-ignore-start -->
 | Method                                 | Description                                           |
 | -------------------------------------- | ----------------------------------------------------- |
 | `->disk('s3')`                         | Override the storage disk for this format             |
@@ -106,7 +107,9 @@ $product->update(['cover' => $imageData]);
 | `->coverDown(w, h)`                    | Same — only shrinks                                   |
 | `->text('Draft', [...])`               | Text overlay (requires a TTF font — see config)       |
 | `->watermark('/path/logo.png', [...])` | Image watermark overlay                               |
+| `->alt('My image')`                    | Override the alt text for this format (defaults to filename stem) |
 | `->customAttributes([...])`            | Custom metadata stored alongside this format entry    |
+<!-- prettier-ignore-end -->
 
 ## Regenerate a format
 

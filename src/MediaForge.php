@@ -147,9 +147,10 @@ class MediaForge
      * ```php
      * [
      *     'default' => ['disk' => 'public', 'path' => 'uploads/img_xxx/default.webp', 'width' => 1920, 'height' => 1080, 'alt' => 'img'],
-     *     'thumb'   => ['disk' => 'public', 'path' => 'uploads/img_xxx/thumb.webp',   'width' => 400,  'height' => 300,  'alt' => 'img'],
+     *     'thumb'   => ['disk' => 'public', 'path' => 'uploads/img_xxx/thumb.webp',   'width' => 400,  'height' => 300,  'alt' => 'img', 'customAttributes' => [...]],
      * ]
      * ```
+     * `customAttributes` is only present when defined on the format via `->customAttributes([...])` or `->alt(...)`.
      *
      * @param  ImageFormat|array<ImageFormat>|null  $imageFormats
      * @param  string|null  $customBaseName  Folder/file name prefix: null = auto slug, '' = ULID only, 'name' = custom prefix
@@ -227,7 +228,7 @@ class MediaForge
                     $entry += [
                         'width' => $image->width(),
                         'height' => $image->height(),
-                        'alt' => $originalFilename,
+                        'alt' => $format->getAlt() ?? $originalFilename,
                     ];
                 } else {
                     $dimensions = $this->applyAndSaveFormat(
@@ -239,7 +240,7 @@ class MediaForge
                     $entry += [
                         'width' => $dimensions['width'],
                         'height' => $dimensions['height'],
-                        'alt' => $originalFilename,
+                        'alt' => $format->getAlt() ?? $originalFilename,
                     ];
                 }
 
@@ -361,7 +362,7 @@ class MediaForge
                     'path' => $imageFilePath,
                     'width' => $image->width(),
                     'height' => $image->height(),
-                    'alt' => $defaultEntry['alt'] ?? '',
+                    'alt' => $format->getAlt() ?? $defaultEntry['alt'] ?? '',
                 ];
             } else {
                 $dimensions = $this->applyAndSaveFormat(
@@ -375,7 +376,7 @@ class MediaForge
                     'path' => $imageFilePath,
                     'width' => $dimensions['width'],
                     'height' => $dimensions['height'],
-                    'alt' => $defaultEntry['alt'] ?? '',
+                    'alt' => $format->getAlt() ?? $defaultEntry['alt'] ?? '',
                 ];
             }
 

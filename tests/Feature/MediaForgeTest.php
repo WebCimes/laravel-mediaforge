@@ -12,11 +12,13 @@ class MediaForgeTest extends TestCase
 {
     private MediaForge $fileService;
 
+    private \Illuminate\Filesystem\FilesystemAdapter $disk;
+
     protected function setUp(): void
     {
         parent::setUp();
 
-        Storage::fake('public');
+        $this->disk = Storage::fake('public');
 
         $this->fileService = app(MediaForge::class);
     }
@@ -41,7 +43,7 @@ class MediaForgeTest extends TestCase
         $this->assertNotNull($result);
         $this->assertArrayHasKey('default', $result);
         $this->assertSame('public', $result['default']['disk']);
-        Storage::disk('public')->assertExists($result['default']['path']);
+        $this->disk->assertExists($result['default']['path']);
     }
 
     public function test_upload_image_without_formats_stores_at_base_path(): void
@@ -59,7 +61,7 @@ class MediaForgeTest extends TestCase
         $parts = explode('/', $path);
         $this->assertCount(2, $parts, 'No sub-folder expected when no formats given');
 
-        Storage::disk('public')->assertExists($path);
+        $this->disk->assertExists($path);
     }
 
     // -------------------------------------------------------------------------
@@ -93,8 +95,8 @@ class MediaForgeTest extends TestCase
         $this->assertSame('default.webp', basename($result['default']['path']));
         $this->assertSame('thumb.webp', basename($result['thumb']['path']));
 
-        Storage::disk('public')->assertExists($result['default']['path']);
-        Storage::disk('public')->assertExists($result['thumb']['path']);
+        $this->disk->assertExists($result['default']['path']);
+        $this->disk->assertExists($result['thumb']['path']);
     }
 
     public function test_upload_with_custom_filename(): void
@@ -108,8 +110,8 @@ class MediaForgeTest extends TestCase
 
         $this->assertSame('hero.webp', basename($result['default']['path']));
         $this->assertSame('hero-thumb.webp', basename($result['thumb']['path']));
-        Storage::disk('public')->assertExists($result['default']['path']);
-        Storage::disk('public')->assertExists($result['thumb']['path']);
+        $this->disk->assertExists($result['default']['path']);
+        $this->disk->assertExists($result['thumb']['path']);
     }
 
     public function test_upload_with_custom_basename(): void
@@ -126,7 +128,7 @@ class MediaForgeTest extends TestCase
 
         $folder = basename(dirname($result['default']['path']));
         $this->assertStringStartsWith('my-product_', $folder);
-        Storage::disk('public')->assertExists($result['default']['path']);
+        $this->disk->assertExists($result['default']['path']);
     }
 
     public function test_upload_with_ulid_only_basename(): void
@@ -143,7 +145,7 @@ class MediaForgeTest extends TestCase
 
         $folder = basename(dirname($result['default']['path']));
         $this->assertMatchesRegularExpression('/^[0-9a-z]{26}$/', $folder);
-        Storage::disk('public')->assertExists($result['default']['path']);
+        $this->disk->assertExists($result['default']['path']);
     }
 
     public function test_upload_non_image_with_custom_basename(): void
@@ -154,7 +156,7 @@ class MediaForgeTest extends TestCase
 
         $filename = basename($result['default']['path']);
         $this->assertStringStartsWith('my-report_', $filename);
-        Storage::disk('public')->assertExists($result['default']['path']);
+        $this->disk->assertExists($result['default']['path']);
     }
 
     public function test_upload_auto_injects_default_when_missing(): void
@@ -190,10 +192,6 @@ class MediaForgeTest extends TestCase
 
         // The parent folder lives inside 'media/'
         $this->assertStringStartsWith('media/', $result['default']['path']);
-
-        // no _config key any more
-        $this->assertArrayNotHasKey('_config', $result['default']);
-        $this->assertArrayNotHasKey('_config', $result['thumb']);
     }
 
     public function test_upload_default_format_without_transforms_copies_original_bytes(): void
@@ -204,7 +202,6 @@ class MediaForgeTest extends TestCase
             // Only a thumb — default will be auto-injected with no transforms
         ]);
 
-        $this->assertArrayNotHasKey('_config', $result['default']);
         $this->assertArrayNotHasKey('baseName', $result['default']);
         $this->assertArrayNotHasKey('baseDirectory', $result['default']);
     }
@@ -233,11 +230,11 @@ class MediaForgeTest extends TestCase
         $result = $this->fileService->upload($file, 'public', '');
 
         $path = $result['default']['path'];
-        Storage::disk('public')->assertExists($path);
+        $this->disk->assertExists($path);
 
         $this->fileService->delete($path, 'public');
 
-        Storage::disk('public')->assertMissing($path);
+        $this->disk->assertMissing($path);
     }
 
     public function test_delete_removes_all_formats_from_image_entry(): void
@@ -249,13 +246,13 @@ class MediaForgeTest extends TestCase
             ImageFormat::make('thumb')->cover(100, 100),
         ]);
 
-        Storage::disk('public')->assertExists($entry['default']['path']);
-        Storage::disk('public')->assertExists($entry['thumb']['path']);
+        $this->disk->assertExists($entry['default']['path']);
+        $this->disk->assertExists($entry['thumb']['path']);
 
         $this->fileService->delete([$entry], 'public');
 
-        Storage::disk('public')->assertMissing($entry['default']['path']);
-        Storage::disk('public')->assertMissing($entry['thumb']['path']);
+        $this->disk->assertMissing($entry['default']['path']);
+        $this->disk->assertMissing($entry['thumb']['path']);
     }
 
     public function test_delete_null_does_not_throw(): void
@@ -283,7 +280,7 @@ class MediaForgeTest extends TestCase
         $this->assertArrayHasKey('thumb', $updated);
         $this->assertSame(dirname($updated['default']['path']), dirname($updated['thumb']['path']));
         $this->assertSame('thumb.webp', basename($updated['thumb']['path']));
-        Storage::disk('public')->assertExists($updated['thumb']['path']);
+        $this->disk->assertExists($updated['thumb']['path']);
     }
 
     public function test_regenerate_replaces_existing_format_file(): void
@@ -296,14 +293,14 @@ class MediaForgeTest extends TestCase
         ]);
 
         $oldThumbPath = $stored['thumb']['path'];
-        Storage::disk('public')->assertExists($oldThumbPath);
+        $this->disk->assertExists($oldThumbPath);
 
         $updated = $this->fileService->regenerate($stored, [
             ImageFormat::make('thumb')->cover(100, 100)->extension('webp'),
         ]);
 
-        Storage::disk('public')->assertMissing($oldThumbPath);
-        Storage::disk('public')->assertExists($updated['thumb']['path']);
+        $this->disk->assertMissing($oldThumbPath);
+        $this->disk->assertExists($updated['thumb']['path']);
     }
 
     public function test_regenerate_throws_when_default_missing(): void
@@ -344,8 +341,8 @@ class MediaForgeTest extends TestCase
             ImageFormat::make('small')->scaleDown(100),
         ]);
 
-        Storage::disk('public')->assertExists($stored['thumb']['path']);
-        Storage::disk('public')->assertExists($stored['small']['path']);
+        $this->disk->assertExists($stored['thumb']['path']);
+        $this->disk->assertExists($stored['small']['path']);
 
         // Regenerate with only 'thumb' — 'small' should be deleted
         $updated = $this->fileService->regenerate($stored, [
@@ -353,7 +350,7 @@ class MediaForgeTest extends TestCase
         ]);
 
         $this->assertArrayNotHasKey('small', $updated);
-        Storage::disk('public')->assertMissing($stored['small']['path']);
+        $this->disk->assertMissing($stored['small']['path']);
         $this->assertArrayHasKey('default', $updated);
         $this->assertArrayHasKey('thumb', $updated);
     }
@@ -371,7 +368,7 @@ class MediaForgeTest extends TestCase
         ]);
 
         $this->assertSame('default.webp', basename($updated['default']['path']));
-        Storage::disk('public')->assertExists($updated['default']['path']);
+        $this->disk->assertExists($updated['default']['path']);
         $this->assertSame(600, $updated['default']['width']);
     }
 
@@ -420,5 +417,63 @@ class MediaForgeTest extends TestCase
 
         // 'default' untouched — no customAttributes key
         $this->assertArrayNotHasKey('customAttributes', $updated['default']);
+    }
+
+    // -------------------------------------------------------------------------
+    // alt
+    // -------------------------------------------------------------------------
+
+    public function test_upload_alt_defaults_to_original_filename(): void
+    {
+        $file = UploadedFile::fake()->image('my-photo.jpg', 800, 600);
+
+        $result = $this->fileService->upload($file, 'public', 'uploads', [
+            ImageFormat::make('default'),
+        ]);
+
+        $this->assertSame('my-photo', $result['default']['alt']);
+    }
+
+    public function test_upload_alt_can_be_overridden_per_format(): void
+    {
+        $file = UploadedFile::fake()->image('photo.jpg', 800, 600);
+
+        $result = $this->fileService->upload($file, 'public', 'uploads', [
+            ImageFormat::make('default')->alt('Product cover'),
+            ImageFormat::make('thumb')->cover(200, 200)->alt('Product thumbnail'),
+        ]);
+
+        $this->assertSame('Product cover', $result['default']['alt']);
+        $this->assertSame('Product thumbnail', $result['thumb']['alt']);
+    }
+
+    public function test_regenerate_alt_inherits_from_default_entry(): void
+    {
+        $file = UploadedFile::fake()->image('banner.jpg', 800, 600);
+
+        $stored = $this->fileService->upload($file, 'public', 'uploads', [
+            ImageFormat::make('default')->alt('Banner image'),
+        ]);
+
+        $updated = $this->fileService->regenerate($stored, [
+            ImageFormat::make('thumb')->cover(200, 200),
+        ]);
+
+        $this->assertSame('Banner image', $updated['thumb']['alt']);
+    }
+
+    public function test_regenerate_alt_can_be_overridden_per_format(): void
+    {
+        $file = UploadedFile::fake()->image('banner.jpg', 800, 600);
+
+        $stored = $this->fileService->upload($file, 'public', 'uploads', [
+            ImageFormat::make('default')->alt('Banner image'),
+        ]);
+
+        $updated = $this->fileService->regenerate($stored, [
+            ImageFormat::make('thumb')->cover(200, 200)->alt('Banner thumbnail'),
+        ]);
+
+        $this->assertSame('Banner thumbnail', $updated['thumb']['alt']);
     }
 }

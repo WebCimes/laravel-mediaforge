@@ -32,6 +32,8 @@ class ImageFormat
 
     private array $customAttributes = [];
 
+    private ?string $alt = null;
+
     public function __construct(private readonly string $name) {}
 
     public static function make(string $name): static
@@ -264,13 +266,26 @@ class ImageFormat
     /**
      * Custom attributes to store alongside this format's entry in the database.
      * Use this for any format-specific data that doesn't map to a built-in option
-     * (e.g. alt text, caption, focal point, custom labels).
+     * (e.g. caption, focal point, custom labels).
      *
-     * Example: `ImageFormat::make('thumb')->customAttributes(['alt' => 'Thumbnail version'])`
+     * Example: `ImageFormat::make('thumb')->customAttributes(['caption' => 'Hero image'])`
      */
     public function customAttributes(array $attributes): static
     {
         $this->customAttributes = $attributes;
+
+        return $this;
+    }
+
+    /**
+     * Override the alt text for this format.
+     * Defaults to the uploaded filename stem when not set.
+     *
+     * Example: `ImageFormat::make('default')->alt('Product cover')`
+     */
+    public function alt(string $alt): static
+    {
+        $this->alt = $alt;
 
         return $this;
     }
@@ -345,6 +360,11 @@ class ImageFormat
         return $this->customAttributes;
     }
 
+    public function getAlt(): ?string
+    {
+        return $this->alt;
+    }
+
     /**
      * Returns true if any image transformation is configured.
      */
@@ -358,7 +378,7 @@ class ImageFormat
     }
 
     /**
-     * Serialize the format config for storage inside _config (enables regeneration).
+     * Serialize the format config (used internally for regeneration).
      * Only non-default/non-null values are included.
      */
     public function toConfigArray(): array
@@ -393,12 +413,15 @@ class ImageFormat
         if (!empty($this->customAttributes)) {
             $config['customAttributes'] = $this->customAttributes;
         }
+        if ($this->alt !== null) {
+            $config['alt'] = $this->alt;
+        }
 
         return $config;
     }
 
     /**
-     * Rebuild an ImageFormat from a stored _config array.
+     * Rebuild an ImageFormat from a config array.
      */
     public static function fromConfigArray(string $name, array $config): static
     {
@@ -437,6 +460,9 @@ class ImageFormat
         }
         if (isset($config['customAttributes'])) {
             $format->customAttributes = $config['customAttributes'];
+        }
+        if (isset($config['alt'])) {
+            $format->alt = $config['alt'];
         }
 
         return $format;
