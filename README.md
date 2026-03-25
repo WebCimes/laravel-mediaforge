@@ -4,6 +4,21 @@ Store images and files directly in your existing model columns — no separate m
 
 Powered by [Intervention Image](https://image.intervention.io/v3), this Laravel package lets you upload a file once and automatically generate multiple formats (thumbnail, WebP, watermark, etc.), each saved as a structured entry you can store in any JSON/text column of your choosing.
 
+## Table of contents
+
+- [Why this package?](#why-this-package)
+- [Features](#features)
+- [Requirements](#requirements)
+- [Installation](#installation)
+- [Basic usage](#basic-usage)
+- [ImageFormat reference](#imageformat-reference)
+- [Handle files (upload + delete + reorder in one call)](#handle-files-upload--delete--reorder-in-one-call)
+- [Regenerate a format](#regenerate-a-format)
+- [Delete files](#delete-files)
+- [Custom base name](#custom-base-name)
+- [Filament integration](#filament-integration)
+- [Configuration](#configuration)
+
 ## Why this package?
 
 Most media libraries (like Spatie Media Library) introduce a dedicated `media` table that links files to models through a polymorphic relationship. This works great for complex scenarios, but adds overhead when you just want to attach one or a few images to a model.
@@ -111,6 +126,85 @@ $product->update(['cover' => $imageData]);
 | `->customAttributes([...])`            | Custom metadata stored alongside this format entry    |
 <!-- prettier-ignore-end -->
 
+## Handle files (upload + delete + reorder in one call)
+
+`handleFiles()` is designed to process the payload emitted by a file input component in a single call: upload new files, delete removed ones, and apply a global ordering across both existing and new items.
+
+```php
+$validated['images'] = MediaForge::handleFiles(
+    diskName: 'public',
+    path: 'products',
+    uploadedFiles: $validated['images']['files'] ?? null,     // new UploadedFile[]
+    filesToDeleteIndex: $validated['images']['deleted'] ?? null, // int[] — indexes into $existingFiles
+    globalOrder: $validated['images']['globalOrder'] ?? null, // full ordered list of all items
+    existingFiles: $product->images,                          // current DB value
+    imageFormats: $this->imageFormats,                        // optional, same as upload()
+);
+
+$product->update(['images' => $validated['images']]);
+```
+
+The method returns the updated flat array ready to be stored, or `null` if the result is empty.
+
+**`globalOrder`** is an array of ordering directives, one per surviving file:
+
+```php
+// Scenario: 3 existing files in DB (indexes 0, 1, 2), index 1 deleted, 2 new files uploaded.
+// filesToDeleteIndex: [1]
+// uploadedFiles: [$new0, $new1]
+// Desired order: new1, existing-0, existing-2, new0
+
+[
+    ['type' => 'new',      'index' => 1], // new1      → position 0
+    ['type' => 'existing', 'index' => 0], // existing0 → position 1
+    ['type' => 'existing', 'index' => 2], // existing2 → position 2 (existing1 was deleted)
+    ['type' => 'new',      'index' => 0], // new0      → position 3
+]
+```
+
+- `type`: `'existing'` (already in DB) or `'new'` (just uploaded)
+- `index` for `existing`: position in the `$existingFiles` array passed to the method
+- `index` for `new`: position in the `$uploadedFiles` array (0-based, matches `DataTransfer` order in the browser)
+- The **array order** defines the final position — the first item ends up at position 0, and so on.
+
+When `globalOrder` is provided, any uploaded file whose index is **not** referenced is automatically deleted from disk to prevent orphaned files.
+
+When `globalOrder` is omitted, existing files come first (in their original order), followed by newly uploaded files.
+
+## Regenerate a format
+
+Re-process derivatives from the stored original at any time — useful when you change the design:
+
+```php
+$updated = MediaForge::regenerate($product->cover, [
+    ImageFormat::make('thumb')->cover(200, 200)->extension('avif'),
+]);
+
+$product->update(['cover' => $updated]);
+```
+
+## Delete files
+
+```php
+// Deletes all files referenced in the stored entry:
+MediaForge::delete($product->cover, 'public');
+```
+
+## Custom base name
+
+The upload folder name is `{slug}_{ulid}` by default. Override it:
+
+```php
+// Auto (default): slug + ULID  → my-photo_01jq8z...
+MediaForge::upload($file, 'public', 'uploads', $formats);
+
+// ULID only (no slug)          → 01jq8z...
+MediaForge::upload($file, 'public', 'uploads', $formats, '');
+
+// Custom prefix + ULID         → product-hero_01jq8z...
+MediaForge::upload($file, 'public', 'uploads', $formats, 'product-hero');
+```
+
 ## Filament integration
 
 `MediaForgeFileUpload` is a drop-in replacement for Filament's `FileUpload` component. It transparently delegates storage to `MediaForge` and encodes the resulting format map as JSON in the database column.
@@ -163,40 +257,6 @@ The column value stored in the database is a plain array (cast it to `array` or 
         'thumb'   => ['disk' => 'public', 'path' => 'uploads/img-b_01jq8z.../thumb.webp',   ...],
     ],
 ]
-```
-
-## Regenerate a format
-
-Re-process derivatives from the stored original at any time — useful when you change the design:
-
-```php
-$updated = MediaForge::regenerate($product->cover, [
-    ImageFormat::make('thumb')->cover(200, 200)->extension('avif'),
-]);
-
-$product->update(['cover' => $updated]);
-```
-
-## Delete files
-
-```php
-// Deletes all files referenced in the stored entry:
-MediaForge::delete($product->cover, 'public');
-```
-
-## Custom base name
-
-The upload folder name is `{slug}_{ulid}` by default. Override it:
-
-```php
-// Auto (default): slug + ULID  → my-photo_01jq8z...
-MediaForge::upload($file, 'public', 'uploads', $formats);
-
-// ULID only (no slug)          → 01jq8z...
-MediaForge::upload($file, 'public', 'uploads', $formats, '');
-
-// Custom prefix + ULID         → product-hero_01jq8z...
-MediaForge::upload($file, 'public', 'uploads', $formats, 'product-hero');
 ```
 
 ## Configuration

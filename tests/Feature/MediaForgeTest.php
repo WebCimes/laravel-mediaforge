@@ -544,4 +544,335 @@ class MediaForgeTest extends TestCase
 
         $this->assertSame('Banner thumbnail', $updated['thumb']['alt']);
     }
+
+    // -------------------------------------------------------------------------
+    // handleFiles()
+    // -------------------------------------------------------------------------
+
+    public function test_handle_files_returns_null_when_nothing(): void
+    {
+        $result = $this->fileService->handleFiles(
+            diskName: 'public',
+            path: 'uploads',
+            uploadedFiles: null,
+            filesToDeleteIndex: null,
+        );
+
+        $this->assertNull($result);
+    }
+
+    public function test_handle_files_uploads_new_file(): void
+    {
+        $file = UploadedFile::fake()->create('doc.pdf', 10);
+
+        $result = $this->fileService->handleFiles(
+            diskName: 'public',
+            path: 'uploads',
+            uploadedFiles: [$file],
+            filesToDeleteIndex: null,
+        );
+
+        $this->assertNotNull($result);
+        $this->assertCount(1, $result);
+        $this->disk->assertExists($result[0]['default']['path']);
+    }
+
+    public function test_handle_files_preserves_existing_files_when_no_changes(): void
+    {
+        $existing = [$this->fileService->upload(
+            UploadedFile::fake()->create('existing.pdf', 10), 'public', 'uploads',
+        )];
+
+        $result = $this->fileService->handleFiles(
+            diskName: 'public',
+            path: 'uploads',
+            uploadedFiles: null,
+            filesToDeleteIndex: null,
+            existingFiles: $existing,
+        );
+
+        $this->assertNotNull($result);
+        $this->assertCount(1, $result);
+        $this->assertSame($existing[0]['default']['path'], $result[0]['default']['path']);
+    }
+
+    public function test_handle_files_merges_new_with_existing(): void
+    {
+        $existing = [$this->fileService->upload(
+            UploadedFile::fake()->create('a.pdf', 10), 'public', 'uploads',
+        )];
+
+        $result = $this->fileService->handleFiles(
+            diskName: 'public',
+            path: 'uploads',
+            uploadedFiles: [UploadedFile::fake()->create('b.pdf', 10)],
+            filesToDeleteIndex: null,
+            existingFiles: $existing,
+        );
+
+        $this->assertNotNull($result);
+        $this->assertCount(2, $result);
+        // Existing first, then new
+        $this->assertSame($existing[0]['default']['path'], $result[0]['default']['path']);
+    }
+
+    public function test_handle_files_deletes_existing_file_by_index(): void
+    {
+        $existing = [
+            $this->fileService->upload(UploadedFile::fake()->create('a.pdf', 10), 'public', 'uploads'),
+            $this->fileService->upload(UploadedFile::fake()->create('b.pdf', 10), 'public', 'uploads'),
+        ];
+
+        $pathA = $existing[0]['default']['path'];
+        $pathB = $existing[1]['default']['path'];
+
+        $result = $this->fileService->handleFiles(
+            diskName: 'public',
+            path: 'uploads',
+            uploadedFiles: null,
+            filesToDeleteIndex: [0],
+            existingFiles: $existing,
+        );
+
+        $this->assertNotNull($result);
+        $this->assertCount(1, $result);
+        $this->disk->assertMissing($pathA);
+        $this->disk->assertExists($pathB);
+        $this->assertSame($pathB, $result[0]['default']['path']);
+    }
+
+    public function test_handle_files_deletes_all_existing_returns_null(): void
+    {
+        $existing = [$this->fileService->upload(
+            UploadedFile::fake()->create('a.pdf', 10), 'public', 'uploads',
+        )];
+
+        $result = $this->fileService->handleFiles(
+            diskName: 'public',
+            path: 'uploads',
+            uploadedFiles: null,
+            filesToDeleteIndex: [0],
+            existingFiles: $existing,
+        );
+
+        $this->assertNull($result);
+    }
+
+    public function test_handle_files_global_order_reverses_existing_files(): void
+    {
+        $existing = [
+            $this->fileService->upload(UploadedFile::fake()->create('a.pdf', 10), 'public', 'uploads'),
+            $this->fileService->upload(UploadedFile::fake()->create('b.pdf', 10), 'public', 'uploads'),
+        ];
+
+        $pathA = $existing[0]['default']['path'];
+        $pathB = $existing[1]['default']['path'];
+
+        $result = $this->fileService->handleFiles(
+            diskName: 'public',
+            path: 'uploads',
+            uploadedFiles: null,
+            filesToDeleteIndex: null,
+            globalOrder: [
+                ['type' => 'existing', 'index' => 1],
+                ['type' => 'existing', 'index' => 0],
+            ],
+            existingFiles: $existing,
+        );
+
+        $this->assertNotNull($result);
+        $this->assertCount(2, $result);
+        $this->assertSame($pathB, $result[0]['default']['path']);
+        $this->assertSame($pathA, $result[1]['default']['path']);
+    }
+
+    public function test_handle_files_global_order_interleaves_existing_and_new(): void
+    {
+        $existing = [$this->fileService->upload(
+            UploadedFile::fake()->create('existing.pdf', 10), 'public', 'uploads',
+        )];
+
+        $pathExisting = $existing[0]['default']['path'];
+
+        $result = $this->fileService->handleFiles(
+            diskName: 'public',
+            path: 'uploads',
+            uploadedFiles: [
+                UploadedFile::fake()->create('new1.pdf', 10), // new index 0
+                UploadedFile::fake()->create('new2.pdf', 10), // new index 1
+            ],
+            filesToDeleteIndex: null,
+            globalOrder: [
+                ['type' => 'new',      'index' => 0],
+                ['type' => 'existing', 'index' => 0],
+                ['type' => 'new',      'index' => 1],
+            ],
+            existingFiles: $existing,
+        );
+
+        $this->assertNotNull($result);
+        $this->assertCount(3, $result);
+        // Position 0 → new file 0 (not the existing one)
+        $this->assertNotSame($pathExisting, $result[0]['default']['path']);
+        // Position 1 → existing
+        $this->assertSame($pathExisting, $result[1]['default']['path']);
+        // Position 2 → new file 1 (different from new file 0)
+        $this->assertNotSame($pathExisting, $result[2]['default']['path']);
+        $this->assertNotSame($result[0]['default']['path'], $result[2]['default']['path']);
+    }
+
+    public function test_handle_files_orphan_upload_deleted_when_not_in_global_order(): void
+    {
+        $result = $this->fileService->handleFiles(
+            diskName: 'public',
+            path: 'uploads',
+            uploadedFiles: [
+                UploadedFile::fake()->create('used.pdf', 10),   // index 0 — referenced
+                UploadedFile::fake()->create('orphan.pdf', 10), // index 1 — NOT referenced
+            ],
+            filesToDeleteIndex: null,
+            globalOrder: [
+                ['type' => 'new', 'index' => 0],
+                // index 1 intentionally omitted
+            ],
+        );
+
+        $this->assertNotNull($result);
+        $this->assertCount(1, $result);
+        $this->disk->assertExists($result[0]['default']['path']);
+
+        // Orphaned file must have been deleted from disk
+        $this->assertCount(1, $this->disk->allFiles('uploads'));
+    }
+
+    public function test_handle_files_empty_global_order_returns_null(): void
+    {
+        $result = $this->fileService->handleFiles(
+            diskName: 'public',
+            path: 'uploads',
+            uploadedFiles: null,
+            filesToDeleteIndex: null,
+            globalOrder: [],
+        );
+
+        $this->assertNull($result);
+    }
+
+    public function test_handle_files_with_image_formats(): void
+    {
+        $file = UploadedFile::fake()->image('photo.jpg', 800, 600);
+
+        $result = $this->fileService->handleFiles(
+            diskName: 'public',
+            path: 'products',
+            uploadedFiles: [$file],
+            filesToDeleteIndex: null,
+            imageFormats: [
+                ImageFormat::make('default')->scaleDown(1920, 1080)->quality(75)->extension('webp'),
+                ImageFormat::make('thumb')->cover(400, 300)->quality(60)->extension('webp'),
+            ],
+        );
+
+        $this->assertNotNull($result);
+        $this->assertCount(1, $result);
+        $this->assertArrayHasKey('default', $result[0]);
+        $this->assertArrayHasKey('thumb', $result[0]);
+        $this->disk->assertExists($result[0]['default']['path']);
+        $this->disk->assertExists($result[0]['thumb']['path']);
+    }
+
+    public function test_handle_files_deletion_and_upload_combined(): void
+    {
+        $existing = [
+            $this->fileService->upload(UploadedFile::fake()->create('keep.pdf', 10), 'public', 'uploads'),
+            $this->fileService->upload(UploadedFile::fake()->create('remove.pdf', 10), 'public', 'uploads'),
+        ];
+
+        $pathKeep   = $existing[0]['default']['path'];
+        $pathRemove = $existing[1]['default']['path'];
+
+        $result = $this->fileService->handleFiles(
+            diskName: 'public',
+            path: 'uploads',
+            uploadedFiles: [UploadedFile::fake()->create('new.pdf', 10)],
+            filesToDeleteIndex: [1],
+            existingFiles: $existing,
+        );
+
+        $this->assertNotNull($result);
+        $this->assertCount(2, $result);
+        $this->disk->assertMissing($pathRemove);
+        $this->disk->assertExists($pathKeep);
+        $this->assertSame($pathKeep, $result[0]['default']['path']);
+    }
+
+    public function test_handle_files_complex_delete_upload_reorder(): void
+    {
+        // Setup: 4 existing files on disk (a, b, c, d)
+        $existing = [
+            $this->fileService->upload(UploadedFile::fake()->create('a.pdf', 10), 'public', 'uploads'), // index 0
+            $this->fileService->upload(UploadedFile::fake()->create('b.pdf', 10), 'public', 'uploads'), // index 1  ← deleted
+            $this->fileService->upload(UploadedFile::fake()->create('c.pdf', 10), 'public', 'uploads'), // index 2
+            $this->fileService->upload(UploadedFile::fake()->create('d.pdf', 10), 'public', 'uploads'), // index 3  ← deleted
+        ];
+
+        $pathA = $existing[0]['default']['path'];
+        $pathB = $existing[1]['default']['path']; // will be deleted
+        $pathC = $existing[2]['default']['path'];
+        $pathD = $existing[3]['default']['path']; // will be deleted
+
+        // Delete b (index 1) and d (index 3).
+        // After deletion + array_values reindex: files[0]=a, files[1]=c
+        // Upload 2 new files. uploadedFilesArray[0]=new1, uploadedFilesArray[1]=new2
+        // Desired final order: [new2, a, new1, c]
+        $result = $this->fileService->handleFiles(
+            diskName: 'public',
+            path: 'uploads',
+            uploadedFiles: [
+                UploadedFile::fake()->create('new1.pdf', 10), // new index 0
+                UploadedFile::fake()->create('new2.pdf', 10), // new index 1
+            ],
+            filesToDeleteIndex: [1, 3],
+            globalOrder: [
+                ['type' => 'new',      'index' => 1], // new2 → 1st
+                ['type' => 'existing', 'index' => 0], // a    → 2nd
+                ['type' => 'new',      'index' => 0], // new1 → 3rd
+                ['type' => 'existing', 'index' => 1], // c    → 4th
+            ],
+            existingFiles: $existing,
+        );
+
+        // --- Disk state ---
+        // b and d must be gone
+        $this->disk->assertMissing($pathB);
+        $this->disk->assertMissing($pathD);
+        // a and c must still exist
+        $this->disk->assertExists($pathA);
+        $this->disk->assertExists($pathC);
+
+        // --- Result structure ---
+        $this->assertNotNull($result);
+        $this->assertCount(4, $result);
+
+        // --- Order: new2, a, new1, c ---
+        // position 0 → new2 (not a, not c)
+        $this->assertNotSame($pathA, $result[0]['default']['path']);
+        $this->assertNotSame($pathC, $result[0]['default']['path']);
+
+        // position 1 → a
+        $this->assertSame($pathA, $result[1]['default']['path']);
+
+        // position 2 → new1 (different from new2, not a, not c)
+        $this->assertNotSame($result[0]['default']['path'], $result[2]['default']['path']);
+        $this->assertNotSame($pathA, $result[2]['default']['path']);
+        $this->assertNotSame($pathC, $result[2]['default']['path']);
+
+        // position 3 → c
+        $this->assertSame($pathC, $result[3]['default']['path']);
+
+        // --- All 4 result files exist on disk ---
+        foreach ($result as $entry) {
+            $this->disk->assertExists($entry['default']['path']);
+        }
+    }
 }

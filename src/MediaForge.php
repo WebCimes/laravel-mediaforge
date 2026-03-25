@@ -465,7 +465,7 @@ class MediaForge
      * @param  string                          $path              Base path inside the disk.
      * @param  array<\Illuminate\Http\UploadedFile>|null  $uploadedFiles     New files to upload.
      * @param  array<int>|null                 $filesToDeleteIndex Indexes into $existingFiles to delete.
-     * @param  array<array{type: string, index: int, globalPosition: int}>|null $globalOrder  Ordering directive.
+     * @param  array<array{type: string, index: int}>|null $globalOrder  Ordering directive (array order = final position).
      * @param  array|null                      $existingFiles     Current DB file list (for deletion + reorder).
      * @param  ImageFormat|array<ImageFormat>|null $imageFormats  Image processing formats.
      * @param  string|null                     $customBaseName    Folder/file prefix: null = auto slug, '' = ULID only.
@@ -508,10 +508,7 @@ class MediaForge
         }
 
         if ($globalOrder) {
-            usort($globalOrder, function ($a, $b) {
-                return ($a['globalPosition'] ?? 0) - ($b['globalPosition'] ?? 0);
-            });
-
+            $referencedNewIndexes = [];
             $orderedFiles = [];
             foreach ($globalOrder as $orderItem) {
                 if ($orderItem['type'] === 'existing' && isset($files[$orderItem['index']])) {
@@ -521,14 +518,23 @@ class MediaForge
                     isset($uploadedFilesArray[$orderItem['index']])
                 ) {
                     $orderedFiles[] = $uploadedFilesArray[$orderItem['index']];
+                    $referencedNewIndexes[] = $orderItem['index'];
+                }
+            }
+
+            // Delete uploaded files not referenced in globalOrder to prevent orphaned files on disk
+            foreach ($uploadedFilesArray as $index => $uploadedResult) {
+                if ($uploadedResult !== null && !in_array($index, $referencedNewIndexes, true)) {
+                    $this->delete([$uploadedResult]);
                 }
             }
 
             return !empty($orderedFiles) ? $orderedFiles : null;
         }
 
-        return !empty($files) || !empty($uploadedFilesArray)
-            ? array_merge($files, $uploadedFilesArray)
+        $filteredUploads = array_values(array_filter($uploadedFilesArray));
+        return !empty($files) || !empty($filteredUploads)
+            ? array_merge($files, $filteredUploads)
             : null;
     }
 }
