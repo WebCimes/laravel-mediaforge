@@ -111,6 +111,60 @@ $product->update(['cover' => $imageData]);
 | `->customAttributes([...])`            | Custom metadata stored alongside this format entry    |
 <!-- prettier-ignore-end -->
 
+## Filament integration
+
+`MediaForgeUpload` is a drop-in replacement for Filament's `FileUpload` component. It transparently delegates storage to `MediaForge` and encodes the resulting format map as JSON in the database column.
+
+All native `FileUpload` methods (`->multiple()`, `->reorderable()`, `->disk()`, `->directory()`, `->panelLayout()`, etc.) work exactly as in standard Filament. The only addition is `->imageFormats()`:
+
+```php
+use Webcimes\LaravelMediaforge\Filament\Forms\Components\MediaForgeUpload;
+use Webcimes\LaravelMediaforge\ImageFormat;
+
+MediaForgeUpload::make('cover')
+    ->label('Cover image')
+    ->imageFormats([
+        ImageFormat::make('default')
+            ->scaleDown(1920, 1080)
+            ->quality(75)
+            ->extension('webp'),
+        ImageFormat::make('thumb')
+            ->cover(400, 300)
+            ->quality(60)
+            ->extension('webp'),
+    ])
+    ->acceptedFileTypes(['image/jpeg', 'image/png', 'image/webp'])
+    ->multiple()
+    ->reorderable()
+    ->appendFiles()
+    ->openable()
+    ->disk('public')
+    ->directory('uploads')
+    ->panelLayout('grid'),
+```
+
+The column value stored in the database is a plain array (cast it to `array` or `json` on the model):
+
+```php
+// Single upload (no ->multiple()):
+[
+    'default' => ['disk' => 'public', 'path' => 'uploads/hero_01jq8z.../default.webp', 'width' => 1920, 'height' => 1080, 'alt' => 'hero'],
+    'thumb'   => ['disk' => 'public', 'path' => 'uploads/hero_01jq8z.../thumb.webp',   'width' => 400,  'height' => 300,  'alt' => 'hero'],
+]
+
+// Multiple uploads (->multiple()):
+[
+    [
+        'default' => ['disk' => 'public', 'path' => 'uploads/img-a_01jq8z.../default.webp', ...],
+        'thumb'   => ['disk' => 'public', 'path' => 'uploads/img-a_01jq8z.../thumb.webp',   ...],
+    ],
+    [
+        'default' => ['disk' => 'public', 'path' => 'uploads/img-b_01jq8z.../default.webp', ...],
+        'thumb'   => ['disk' => 'public', 'path' => 'uploads/img-b_01jq8z.../thumb.webp',   ...],
+    ],
+]
+```
+
 ## Regenerate a format
 
 Re-process derivatives from the stored original at any time — useful when you change the design:
