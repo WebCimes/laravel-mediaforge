@@ -83,11 +83,14 @@ class MediaForgeUpload extends FileUpload
                 return null;
             }
 
-            return [
+            /** @var \Illuminate\Filesystem\FilesystemAdapter $storageDisk */
+                $storageDisk = Storage::disk($defaultFormat['disk']);
+
+                return [
                 'name' => basename($defaultFormat['path']),
                 'size' => 0,
                 'type' => 'image/jpeg',
-                'url' => Storage::disk($defaultFormat['disk'])->url($defaultFormat['path']),
+                'url' => $storageDisk->url($defaultFormat['path']),
             ];
         });
 

@@ -392,6 +392,23 @@ class MediaForge
     }
 
     /**
+     * Delete an image folder if it was created by this package and is now empty.
+     * Image folders always end with a ULID (26 lowercase alphanumeric chars) — e.g.
+     * 'hero_01jq8z...' or just '01jq8z...'. This is the reliable signal that the
+     * directory was generated here and can be cleaned up, regardless of base path depth.
+     */
+    private function deleteImageFolderIfEmpty(string $diskName, string $dir): void
+    {
+        if (!preg_match('/(?:^|_)[0-9a-z]{26}$/', basename($dir))) {
+            return;
+        }
+        $disk = $this->filesystem->disk($diskName);
+        if ($disk->exists($dir) && count($disk->files($dir)) === 0) {
+            $disk->deleteDirectory($dir);
+        }
+    }
+
+    /**
      * Delete file(s) or image(s).
      *
      * @param  array|string|null  $filesToDelete
@@ -409,19 +426,35 @@ class MediaForge
         if (is_array($filesToDelete)) {
             foreach ($filesToDelete as $file) {
                 if (is_array($file)) {
+                    // Track directories per disk to clean up empty image folders after deletion
+                    $directories = [];
+
                     foreach ($file as $fileDetail) {
                         if (isset($fileDetail['disk'], $fileDetail['path'])) {
                             $this->filesystem
                                 ->disk($fileDetail['disk'])
                                 ->delete($fileDetail['path']);
+
+                            $dir = dirname($fileDetail['path']);
+                            if ($dir !== '.') {
+                                $directories[$fileDetail['disk']][$dir] = true;
+                            }
+                        }
+                    }
+
+                    foreach ($directories as $dirDiskName => $dirs) {
+                        foreach (array_keys($dirs) as $dir) {
+                            $this->deleteImageFolderIfEmpty($dirDiskName, $dir);
                         }
                     }
                 } elseif (is_string($file)) {
                     $this->filesystem->disk($diskName)->delete($file);
+                    $this->deleteImageFolderIfEmpty($diskName, dirname($file));
                 }
             }
         } elseif (is_string($filesToDelete)) {
             $this->filesystem->disk($diskName)->delete($filesToDelete);
+            $this->deleteImageFolderIfEmpty($diskName, dirname($filesToDelete));
         }
     }
 

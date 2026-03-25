@@ -224,6 +224,20 @@ class MediaForgeTest extends TestCase
     // delete()
     // -------------------------------------------------------------------------
 
+    public function test_delete_non_image_entry_does_not_remove_base_folder(): void
+    {
+        $file = UploadedFile::fake()->create('report.pdf', 10);
+        $entry = $this->fileService->upload($file, 'public', 'docs');
+
+        $this->disk->assertExists($entry['default']['path']);
+
+        $this->fileService->delete([$entry], 'public');
+
+        $this->disk->assertMissing($entry['default']['path']);
+        // Base folder 'docs/' must NOT be deleted
+        $this->assertTrue($this->disk->exists('docs'));
+    }
+
     public function test_delete_removes_file_from_disk(): void
     {
         $file = UploadedFile::fake()->create('to_delete.txt', 1);
@@ -253,6 +267,60 @@ class MediaForgeTest extends TestCase
 
         $this->disk->assertMissing($entry['default']['path']);
         $this->disk->assertMissing($entry['thumb']['path']);
+    }
+
+    public function test_delete_removes_image_folder_when_empty(): void
+    {
+        $file = UploadedFile::fake()->image('folder_cleanup.jpg', 500, 500);
+
+        $entry = $this->fileService->upload($file, 'public', 'uploads', [
+            ImageFormat::make('default'),
+            ImageFormat::make('thumb')->cover(100, 100),
+        ]);
+
+        $folder = dirname($entry['default']['path']);
+
+        $this->assertTrue($this->disk->exists($folder));
+
+        $this->fileService->delete([$entry], 'public');
+
+        $this->assertFalse($this->disk->exists($folder));
+    }
+
+    public function test_delete_removes_image_folder_when_empty_nested_path(): void
+    {
+        // Verifies folder cleanup works regardless of base path depth (e.g. 'test/photos')
+        $file = UploadedFile::fake()->image('deep.jpg', 200, 200);
+
+        $entry = $this->fileService->upload($file, 'public', 'test/photos', [
+            ImageFormat::make('default'),
+        ]);
+
+        $folder = dirname($entry['default']['path']);
+        $this->assertTrue($this->disk->exists($folder));
+
+        $this->fileService->delete([$entry], 'public');
+
+        $this->assertFalse($this->disk->exists($folder));
+        // Base folder must NOT be deleted
+        $this->assertTrue($this->disk->exists('test/photos'));
+    }
+
+    public function test_delete_string_path_cleans_up_image_folder(): void
+    {
+        $file = UploadedFile::fake()->image('solo.jpg', 200, 200);
+
+        $entry = $this->fileService->upload($file, 'public', 'uploads', [
+            ImageFormat::make('default'),
+        ]);
+
+        $folder = dirname($entry['default']['path']);
+
+        // Delete via plain string path
+        $this->fileService->delete($entry['default']['path'], 'public');
+
+        $this->disk->assertMissing($entry['default']['path']);
+        $this->assertFalse($this->disk->exists($folder));
     }
 
     public function test_delete_null_does_not_throw(): void
