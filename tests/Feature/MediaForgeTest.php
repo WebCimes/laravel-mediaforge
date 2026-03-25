@@ -806,6 +806,40 @@ class MediaForgeTest extends TestCase
         $this->assertSame($pathKeep, $result[0]['default']['path']);
     }
 
+    public function test_handle_files_delete_and_reorder_uses_original_indexes(): void
+    {
+        // Regression: when files are deleted, globalOrder must use the original existingFiles
+        // indexes, not the re-indexed positions after array_values().
+        // Scenario: 3 existing, move index 1 to first, delete index 0.
+        $existing = [
+            $this->fileService->upload(UploadedFile::fake()->create('img0.pdf', 10), 'public', 'uploads'), // 0
+            $this->fileService->upload(UploadedFile::fake()->create('img1.pdf', 10), 'public', 'uploads'), // 1
+            $this->fileService->upload(UploadedFile::fake()->create('img2.pdf', 10), 'public', 'uploads'), // 2
+        ];
+
+        $path0 = $existing[0]['default']['path']; // will be deleted
+        $path1 = $existing[1]['default']['path'];
+        $path2 = $existing[2]['default']['path'];
+
+        $result = $this->fileService->handleFiles(
+            diskName: 'public',
+            path: 'uploads',
+            uploadedFiles: null,
+            filesToDeleteIndex: [0],
+            globalOrder: [
+                ['type' => 'existing', 'index' => 1], // img1 (original index 1) → 1st
+                ['type' => 'existing', 'index' => 2], // img2 (original index 2) → 2nd
+            ],
+            existingFiles: $existing,
+        );
+
+        $this->disk->assertMissing($path0);
+        $this->assertNotNull($result);
+        $this->assertCount(2, $result);
+        $this->assertSame($path1, $result[0]['default']['path']); // img1 is first
+        $this->assertSame($path2, $result[1]['default']['path']); // img2 is second
+    }
+
     public function test_handle_files_complex_delete_upload_reorder(): void
     {
         // Setup: 4 existing files on disk (a, b, c, d)
@@ -822,8 +856,8 @@ class MediaForgeTest extends TestCase
         $pathD = $existing[3]['default']['path']; // will be deleted
 
         // Delete b (index 1) and d (index 3).
-        // After deletion + array_values reindex: files[0]=a, files[1]=c
         // Upload 2 new files. uploadedFilesArray[0]=new1, uploadedFilesArray[1]=new2
+        // globalOrder uses ORIGINAL existingFiles indexes (a=0, b=1, c=2, d=3)
         // Desired final order: [new2, a, new1, c]
         $result = $this->fileService->handleFiles(
             diskName: 'public',
@@ -834,10 +868,10 @@ class MediaForgeTest extends TestCase
             ],
             filesToDeleteIndex: [1, 3],
             globalOrder: [
-                ['type' => 'new',      'index' => 1], // new2 → 1st
-                ['type' => 'existing', 'index' => 0], // a    → 2nd
-                ['type' => 'new',      'index' => 0], // new1 → 3rd
-                ['type' => 'existing', 'index' => 1], // c    → 4th
+                ['type' => 'new',      'index' => 1], // new2      → 1st
+                ['type' => 'existing', 'index' => 0], // a (orig 0) → 2nd
+                ['type' => 'new',      'index' => 0], // new1      → 3rd
+                ['type' => 'existing', 'index' => 2], // c (orig 2) → 4th
             ],
             existingFiles: $existing,
         );

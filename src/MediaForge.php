@@ -510,15 +510,17 @@ class MediaForge
         if ($globalOrder) {
             $referencedNewIndexes = [];
             $orderedFiles = [];
+            $deletedIndexes = array_map('intval', $filesToDeleteIndex ?? []);
             foreach ($globalOrder as $orderItem) {
-                if ($orderItem['type'] === 'existing' && isset($files[$orderItem['index']])) {
-                    $orderedFiles[] = $files[$orderItem['index']];
-                } elseif (
-                    $orderItem['type'] === 'new' &&
-                    isset($uploadedFilesArray[$orderItem['index']])
-                ) {
-                    $orderedFiles[] = $uploadedFilesArray[$orderItem['index']];
-                    $referencedNewIndexes[] = (int) $orderItem['index'];
+                $idx = (int) $orderItem['index'];
+                if ($orderItem['type'] === 'existing') {
+                    // Use original existingFiles indexes because $files is re-indexed after deletions
+                    if (isset(($existingFiles ?? [])[$idx]) && !in_array($idx, $deletedIndexes, true)) {
+                        $orderedFiles[] = $existingFiles[$idx];
+                    }
+                } elseif ($orderItem['type'] === 'new' && isset($uploadedFilesArray[$idx])) {
+                    $orderedFiles[] = $uploadedFilesArray[$idx];
+                    $referencedNewIndexes[] = $idx;
                 }
             }
 
