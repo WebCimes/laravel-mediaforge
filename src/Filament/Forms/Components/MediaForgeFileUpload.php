@@ -18,7 +18,7 @@ use Webcimes\LaravelMediaforge\MediaForge;
  *   'thumb'   => ['disk' => 'public', 'path' => 'uploads/thumb/img_xxx.jpg',    'width' => 400,  ...],
  * ]
  */
-class MediaForgeUpload extends FileUpload
+class MediaForgeFileUpload extends FileUpload
 {
     /** @var array<ImageFormat>|null */
     protected ?array $imageFormats = null;
@@ -32,7 +32,7 @@ class MediaForgeUpload extends FileUpload
 
         // DB → internal: decode each stored array to a JSON string.
         $this->afterStateHydrated(static function (
-            MediaForgeUpload $component,
+            MediaForgeFileUpload $component,
             mixed $state,
         ): void {
             if (blank($state) || !is_array($state)) {
@@ -56,7 +56,7 @@ class MediaForgeUpload extends FileUpload
 
         // Upload: delegate to MediaForge, return JSON-encoded result.
         $this->saveUploadedFileUsing(static function (
-            MediaForgeUpload $component,
+            MediaForgeFileUpload $component,
             TemporaryUploadedFile $file,
         ): ?string {
             $result = app(MediaForge::class)->upload(

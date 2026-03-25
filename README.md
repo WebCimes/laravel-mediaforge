@@ -113,15 +113,15 @@ $product->update(['cover' => $imageData]);
 
 ## Filament integration
 
-`MediaForgeUpload` is a drop-in replacement for Filament's `FileUpload` component. It transparently delegates storage to `MediaForge` and encodes the resulting format map as JSON in the database column.
+`MediaForgeFileUpload` is a drop-in replacement for Filament's `FileUpload` component. It transparently delegates storage to `MediaForge` and encodes the resulting format map as JSON in the database column.
 
 All native `FileUpload` methods (`->multiple()`, `->reorderable()`, `->disk()`, `->directory()`, `->panelLayout()`, etc.) work exactly as in standard Filament. The only addition is `->imageFormats()`:
 
 ```php
-use Webcimes\LaravelMediaforge\Filament\Forms\Components\MediaForgeUpload;
+use Webcimes\LaravelMediaforge\Filament\Forms\Components\MediaForgeFileUpload;
 use Webcimes\LaravelMediaforge\ImageFormat;
 
-MediaForgeUpload::make('cover')
+MediaForgeFileUpload::make('cover')
     ->label('Cover image')
     ->imageFormats([
         ImageFormat::make('default')
