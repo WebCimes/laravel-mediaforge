@@ -518,7 +518,7 @@ class MediaForge
                     isset($uploadedFilesArray[$orderItem['index']])
                 ) {
                     $orderedFiles[] = $uploadedFilesArray[$orderItem['index']];
-                    $referencedNewIndexes[] = $orderItem['index'];
+                    $referencedNewIndexes[] = (int) $orderItem['index'];
                 }
             }
 
