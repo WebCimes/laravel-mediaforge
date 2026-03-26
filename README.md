@@ -12,10 +12,12 @@ Powered by [Intervention Image](https://image.intervention.io/v3), this Laravel 
 - [Installation](#installation)
 - [Basic usage](#basic-usage)
 - [ImageFormat reference](#imageformat-reference)
+- [Responsive images (srcset)](#responsive-images-srcset)
 - [Handle files (upload + delete + reorder in one call)](#handle-files-upload--delete--reorder-in-one-call)
 - [Regenerate a format](#regenerate-a-format)
 - [Delete files](#delete-files)
 - [Custom base name](#custom-base-name)
+- [Queue processing](#queue-processing)
 - [Filament integration](#filament-integration)
 - [Configuration](#configuration)
 
@@ -34,10 +36,12 @@ Most media libraries (like Spatie Media Library) introduce a dedicated `media` t
 
 - Fluent `ImageFormat` builder — chain transforms in a readable, IDE-friendly way
 - Multi-format processing in one upload (default + thumb + WebP, all at once)
+- Responsive image variants via `->srcset()` with automatic `scaleDown` per width
 - All formats of the same upload grouped in a single folder for easy management
 - ULID-based unique naming (collision-proof, chronologically sortable, URL-safe)
 - Plain PHP array output — no model binding required
 - Regenerate derivative formats from the stored original at any time
+- Queue support — heavy format processing dispatched as a background job (opt-in)
 - Works with any Laravel filesystem disk (local, S3, SFTP, …)
 
 ## Requirements
@@ -122,11 +126,70 @@ $product->update(['cover' => $imageData]);
 | `->coverDown(w, h)`                    | Same — only shrinks                                   |
 | `->text('Draft', [...])`               | Text overlay (requires a TTF font — see config)       |
 | `->watermark('/path/logo.png', [...])` | Image watermark overlay                               |
+| `->srcset([1920, 1080, 720])`          | Responsive image variants — see [Responsive images](#responsive-images-srcset) |
 | `->alt('My image')`                    | Override the alt text for this format (defaults to filename stem) |
 | `->customAttributes([...])`            | Custom metadata stored alongside this format entry    |
 <!-- prettier-ignore-end -->
 
-## Handle files (upload + delete + reorder in one call)
+## Responsive images (srcset)
+
+`->srcset()` expands one `ImageFormat` into multiple width variants, each saved as an independent format entry. This is the recommended way to produce responsive images for use with the HTML `srcset` attribute.
+
+```php
+$imageData = MediaForge::upload(
+    $request->file('hero'),
+    'public',
+    'uploads',
+    [
+        ImageFormat::make('hero')
+            ->srcset([1920, 1080, 720, 480])
+            ->extension('webp')
+            ->quality(80),
+    ],
+);
+```
+
+This produces four format keys in the result array:
+
+```php
+[
+    'default'      => ['disk' => 'public', 'path' => 'uploads/hero_xxx/default.jpg',      'width' => 2000, 'height' => 1000, 'alt' => 'hero'],
+    'hero_1920w'   => ['disk' => 'public', 'path' => 'uploads/hero_xxx/hero_1920w.webp',  'width' => 1920, 'height' => 960,  'alt' => 'hero'],
+    'hero_1080w'   => ['disk' => 'public', 'path' => 'uploads/hero_xxx/hero_1080w.webp',  'width' => 1080, 'height' => 540,  'alt' => 'hero'],
+    'hero_720w'    => ['disk' => 'public', 'path' => 'uploads/hero_xxx/hero_720w.webp',   'width' => 720,  'height' => 360,  'alt' => 'hero'],
+    'hero_480w'    => ['disk' => 'public', 'path' => 'uploads/hero_xxx/hero_480w.webp',   'width' => 480,  'height' => 240,  'alt' => 'hero'],
+]
+```
+
+**Resize** — toujours `scaleDown` : aspect ratio préservé, jamais d'upscaling, hauteur calculée automatiquement.
+
+**`skipLarger`** (défaut `true`) — les variantes dont la largeur cible dépasse la source sont ignorées : aucun
+fichier écrit, aucune entrée créée. Le format `default` est toujours présent et sert de fallback dans
+l’attribut `src`. Si `$srcset` est vide le navigateur utilise simplement `src`.
+
+```php
+// Défaut — source 600px → seul hero_480w est écrit, les 3 autres sont ignorés
+ImageFormat::make('hero')->srcset([1920, 1080, 720, 480])->extension('webp');
+
+// skipLarger: false — toutes les variantes sont créées (scaleDown les plafonne à la largeur source)
+ImageFormat::make('hero')->srcset([1920, 1080, 720, 480], skipLarger: false)->extension('webp');
+```
+
+**Other options (`extension()`, `quality()`, `watermark()`, `text()`, `alt()`, `customAttributes()`) are inherited by all variants.**
+
+**Building an `<img srcset="…">` attribute (in your Blade view):**
+
+```php
+$srcset = collect($product->cover)
+    ->filter(fn($v, $k) => str_ends_with($k, 'w') && isset($v['width']))
+    ->map(fn($v) => Storage::disk($v['disk'])->url($v['path']) . ' ' . $v['width'] . 'w')
+    ->implode(', ');
+
+// <img src="…default.jpg" srcset="…1920w.webp 1920w, …1080w.webp 1080w, …" sizes="100vw" alt="…">
+// Si $srcset est vide (source plus petite que toutes les largeurs demandées), le navigateur use src.
+```
+
+
 
 `handleFiles()` is designed to process the payload emitted by a file input component in a single call: upload new files, delete removed ones, and apply a global ordering across both existing and new items.
 
@@ -205,11 +268,92 @@ MediaForge::upload($file, 'public', 'uploads', $formats, '');
 MediaForge::upload($file, 'public', 'uploads', $formats, 'product-hero');
 ```
 
+## Queue processing
+
+By default all formats are processed synchronously during the upload request. For large images or many format variants, you can dispatch the processing of non-`default` formats to a background queue job — keeping the HTTP response fast.
+
+The `default` format is **always** processed synchronously so the caller always receives a valid file immediately. All other formats are dispatched as a `ProcessImageFormatsJob` and produce a `processing: true` stub in the meantime.
+
+### Enabling queue processing
+
+```php
+// Plain upload
+$imageData = MediaForge::upload(
+    $request->file('cover'),
+    'public',
+    'uploads',
+    [
+        ImageFormat::make('default')->scaleDown(1920, 1080)->extension('webp'),
+        ImageFormat::make('thumb')->cover(400, 300)->extension('webp'),
+        ImageFormat::make('hero')->srcset([1920, 1080, 720])->extension('webp'),
+    ],
+    queued: true,
+);
+
+// $imageData immediately available:
+// [
+//   'default'    => ['disk' => ..., 'path' => ..., 'width' => 1920, ...],  ← ready
+//   'thumb'      => ['processing' => true, 'disk' => 'public'],             ← pending
+//   'hero_1920w' => ['processing' => true, 'disk' => 'public'],             ← pending
+//   'hero_1080w' => ['processing' => true, 'disk' => 'public'],             ← pending
+//   'hero_720w'  => ['processing' => true, 'disk' => 'public'],             ← pending
+// ]
+$product->update(['cover' => $imageData]);
+```
+
+### Listening for completion
+
+When the job finishes it fires `ImageFormatsProcessed`. Listen to it to update the model:
+
+```php
+use Webcimes\LaravelMediaforge\Events\ImageFormatsProcessed;
+
+Event::listen(ImageFormatsProcessed::class, function (ImageFormatsProcessed $event) {
+    // $event->defaultPath → path of the 'default' format, used as a lookup key
+    // $event->entry       → complete entry with all format keys fully resolved
+
+    $product = Product::where('cover->default->path', $event->defaultPath)->first();
+    // ↑ Laravel's JSON column where-clause — works on MySQL, MariaDB, SQLite, and PostgreSQL.
+
+    if ($product) {
+        $product->cover = $event->entry;
+        $product->save();
+    }
+});
+```
+
+### Queue configuration
+
+In `.env`:
+
+```dotenv
+MEDIAFORGE_QUEUE_CONNECTION=redis   # null = use the app's default QUEUE_CONNECTION
+MEDIAFORGE_QUEUE_NAME=mediaforge    # Isolate MediaForge jobs on their own queue (defaults to 'default' if left empty)
+```
+
+Start a dedicated worker for MediaForge jobs:
+
+```bash
+php artisan queue:work --queue=mediaforge
+```
+
+If `MEDIAFORGE_QUEUE_NAME` is left as `default`, jobs run on the shared default queue — fine for simple setups, but a dedicated queue is recommended for production to prevent heavy image processing from blocking other jobs.
+
+### Filament + queue
+
+The Filament `MediaForgeFileUpload` component has a `->queued()` option:
+
+```php
+MediaForgeFileUpload::make('cover')
+    ->imageFormats([...])
+    ->queued()   // enable background processing
+```
+
 ## Filament integration
 
 `MediaForgeFileUpload` is a drop-in replacement for Filament's `FileUpload` component. It transparently delegates storage to `MediaForge` and encodes the resulting format map as JSON in the database column.
 
-All native `FileUpload` methods (`->multiple()`, `->reorderable()`, `->disk()`, `->directory()`, `->panelLayout()`, etc.) work exactly as in standard Filament. The only addition is `->imageFormats()`:
+All native `FileUpload` methods (`->multiple()`, `->reorderable()`, `->disk()`, `->directory()`, `->panelLayout()`, etc.) work exactly as in standard Filament. The MediaForge-specific additions are `->imageFormats()` and `->queued()`:
 
 ```php
 use Webcimes\LaravelMediaforge\Filament\Forms\Components\MediaForgeFileUpload;
@@ -227,6 +371,7 @@ MediaForgeFileUpload::make('cover')
             ->quality(60)
             ->extension('webp'),
     ])
+    ->queued()   // optional — dispatch non-default formats to a background job
     ->acceptedFileTypes(['image/jpeg', 'image/png', 'image/webp'])
     ->multiple()
     ->reorderable()
@@ -291,6 +436,15 @@ return [
         'x' => 0,
         'y' => 0,
         'opacity' => 75,
+    ],
+
+    // Queue configuration for background format processing (upload(..., queued: true)).
+    // The 'default' format is always synchronous; all other formats are dispatched as a job.
+    // Set MEDIAFORGE_QUEUE_NAME to a dedicated queue (e.g. 'mediaforge') to isolate processing
+    // from your other jobs. Leave MEDIAFORGE_QUEUE_CONNECTION as null to use the app default.
+    'queue' => [
+        'connection' => null,      // null = app default (QUEUE_CONNECTION). Other values: 'redis', 'database', 'sqs', 'sync'
+        'name'       => 'default', // queue name — use a dedicated name like 'mediaforge' in production
     ],
 ];
 ```

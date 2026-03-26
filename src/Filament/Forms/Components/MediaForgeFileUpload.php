@@ -23,6 +23,8 @@ class MediaForgeFileUpload extends FileUpload
     /** @var array<ImageFormat>|null */
     protected ?array $imageFormats = null;
 
+    protected bool $queued = false;
+
     protected function setUp(): void
     {
         parent::setUp();
@@ -64,6 +66,8 @@ class MediaForgeFileUpload extends FileUpload
                 $component->getDiskName(),
                 $component->getDirectory() ?? '',
                 $component->getImageFormats(),
+                null,
+                $component->isQueued(),
             );
 
             return $result ? json_encode($result) : null;
@@ -137,6 +141,25 @@ class MediaForgeFileUpload extends FileUpload
         $this->imageFormats = $formats instanceof Closure ? $formats() : $formats;
 
         return $this;
+    }
+
+    /**
+     * Process non-default image formats in a background queue job.
+     * The 'default' format is always processed synchronously.
+     *
+     * Listen to \Webcimes\LaravelMediaforge\Events\ImageFormatsProcessed
+     * to update your model once the job completes.
+     */
+    public function queued(bool $queued = true): static
+    {
+        $this->queued = $queued;
+
+        return $this;
+    }
+
+    public function isQueued(): bool
+    {
+        return $this->queued;
     }
 
     /**

@@ -6,6 +6,7 @@ use Illuminate\Support\Str;
 use Intervention\Image\ImageManager;
 use Illuminate\Contracts\Filesystem\Factory;
 use Intervention\Image\Interfaces\ImageInterface;
+use Webcimes\LaravelMediaforge\Jobs\ProcessImageFormatsJob;
 
 class MediaForge
 {
@@ -14,6 +15,7 @@ class MediaForge
     /**
      * Normalize an ImageFormat|ImageFormat[] input into a keyed array.
      * Auto-injects a plain 'default' format at the front if none is provided.
+     * Srcset formats are expanded into individual width variants ({name}_{width}w).
      *
      * @param  ImageFormat|array<ImageFormat>|null  $imageFormats
      * @return array<string, ImageFormat>|null  null when $imageFormats itself is null
@@ -27,7 +29,14 @@ class MediaForge
         $formats = [];
 
         foreach (is_array($imageFormats) ? $imageFormats : [$imageFormats] as $format) {
-            $formats[$format->getName()] = $format;
+            if ($format->isSrcset()) {
+                foreach ($format->getSrcsetWidths() as $width) {
+                    $expanded = $format->expandForSrcset($width);
+                    $formats[$expanded->getName()] = $expanded;
+                }
+            } else {
+                $formats[$format->getName()] = $format;
+            }
         }
 
         // Auto-inject a 'default' (no transforms = original copy) if not explicitly defined
@@ -36,6 +45,74 @@ class MediaForge
         }
 
         return $formats;
+    }
+
+    /**
+     * Process a single image format for an uploaded file and return the entry array.
+     * Extracted to allow reuse between the sync loop and the queued-upload path.
+     */
+    private function processUploadFormat(
+        \Illuminate\Http\UploadedFile $uploadedFile,
+        ImageFormat $format,
+        string $formatName,
+        string $diskName,
+        string $baseName,
+        string $path,
+        string $originalExtension,
+        string $originalFilename,
+    ): array {
+        $imageDiskName = $format->getDisk() ?? $diskName;
+        $imageDisk = $this->filesystem->disk($imageDiskName);
+
+        $imageExtension = $format->getExtension() ?? $originalExtension;
+        $imageDirectory = rtrim($format->getPath() ?? $path . '/' . $baseName, '/');
+        $imageFileName =
+            ($format->getFilename() ?? $formatName) .
+            $format->getSuffix() .
+            '.' .
+            $imageExtension;
+        $imageFilePath = $imageDirectory . '/' . $imageFileName;
+
+        if (!$imageDisk->exists($imageDirectory)) {
+            $imageDisk->makeDirectory($imageDirectory);
+        }
+
+        $image = $this->imageManager->read($uploadedFile);
+        $entry = [
+            'disk' => $imageDiskName,
+            'path' => $imageFilePath,
+        ];
+
+        if (!$format->hasTransforms()) {
+            $imageDisk->put(
+                $imageFilePath,
+                file_get_contents($uploadedFile->getRealPath()),
+            );
+            $entry += [
+                'width' => $image->width(),
+                'height' => $image->height(),
+                'alt' => $format->getAlt() ?? $originalFilename,
+            ];
+        } else {
+            $dimensions = $this->applyAndSaveFormat(
+                $image,
+                $format,
+                $imageDiskName,
+                $imageFilePath,
+            );
+            $entry += [
+                'width' => $dimensions['width'],
+                'height' => $dimensions['height'],
+                'alt' => $format->getAlt() ?? $originalFilename,
+            ];
+        }
+
+        $customAttributes = $format->getCustomAttributes();
+        if (!empty($customAttributes)) {
+            $entry['customAttributes'] = $customAttributes;
+        }
+
+        return $entry;
     }
 
     /**
@@ -161,6 +238,7 @@ class MediaForge
         string $path = '',
         ImageFormat|array|null $imageFormats = null,
         ?string $customBaseName = null,
+        bool $queued = false,
     ): array|null {
         $disk = $this->filesystem->disk($diskName);
 
@@ -193,63 +271,75 @@ class MediaForge
 
             $result = [];
 
+            // Read source dimensions once if any expanded format uses skipLarger
+            $sourceWidth = null;
+            foreach ($formats as $format) {
+                if ($format->isSrcsetSkipLarger()) {
+                    $sourceWidth = $this->imageManager->read($uploadedFile)->width();
+                    break;
+                }
+            }
+
+            if ($queued) {
+                // Sync: process only 'default' so the response always has a valid entry.
+                // All other formats are dispatched to a background queue job.
+                $result['default'] = $this->processUploadFormat(
+                    $uploadedFile,
+                    $formats['default'],
+                    'default',
+                    $diskName,
+                    $baseName,
+                    $path,
+                    $originalExtension,
+                    $originalFilename,
+                );
+
+                $nonDefaultFormatsConfig = [];
+                foreach ($formats as $formatName => $format) {
+                    if ($formatName === 'default') {
+                        continue;
+                    }
+                    if ($format->isSrcsetSkipLarger() && $format->getWidth() !== null && $sourceWidth !== null && $format->getWidth() > $sourceWidth) {
+                        continue;
+                    }
+                    $result[$formatName] = [
+                        'processing' => true,
+                        'disk' => $format->getDisk() ?? $diskName,
+                    ];
+                    $nonDefaultFormatsConfig[$formatName] = $format->toConfigArray();
+                }
+
+                if (!empty($nonDefaultFormatsConfig)) {
+                    $connection = config('mediaforge.queue.connection');
+                    $queueName  = config('mediaforge.queue.name', 'default');
+
+                    $dispatched = ProcessImageFormatsJob::dispatch(
+                        ['default' => $result['default']],
+                        $nonDefaultFormatsConfig,
+                    )->onQueue($queueName);
+
+                    if ($connection) {
+                        $dispatched->onConnection($connection);
+                    }
+                }
+
+                return $result;
+            }
+
             foreach ($formats as $formatName => $format) {
-                $imageDiskName = $format->getDisk() ?? $diskName;
-                $imageDisk = $this->filesystem->disk($imageDiskName);
-
-                // One folder per image: $path/$baseName — all formats live inside it
-                $imageExtension = $format->getExtension() ?? $originalExtension;
-                $imageDirectory = rtrim($format->getPath() ?? $path . '/' . $baseName, '/');
-                $imageFileName =
-                    ($format->getFilename() ?? $formatName) .
-                    $format->getSuffix() .
-                    '.' .
-                    $imageExtension;
-                $imageFilePath = $imageDirectory . '/' . $imageFileName;
-
-                if (!$imageDisk->exists($imageDirectory)) {
-                    $imageDisk->makeDirectory($imageDirectory);
+                if ($format->isSrcsetSkipLarger() && $format->getWidth() !== null && $sourceWidth !== null && $format->getWidth() > $sourceWidth) {
+                    continue;
                 }
-
-                // Read image fresh for each format (transforms are mutating)
-                $image = $this->imageManager->read($uploadedFile);
-
-                $entry = [
-                    'disk' => $imageDiskName,
-                    'path' => $imageFilePath,
-                ];
-
-                if (!$format->hasTransforms()) {
-                    // No transforms: copy original bytes to avoid re-encoding
-                    $imageDisk->put(
-                        $imageFilePath,
-                        file_get_contents($uploadedFile->getRealPath()),
-                    );
-                    $entry += [
-                        'width' => $image->width(),
-                        'height' => $image->height(),
-                        'alt' => $format->getAlt() ?? $originalFilename,
-                    ];
-                } else {
-                    $dimensions = $this->applyAndSaveFormat(
-                        $image,
-                        $format,
-                        $imageDiskName,
-                        $imageFilePath,
-                    );
-                    $entry += [
-                        'width' => $dimensions['width'],
-                        'height' => $dimensions['height'],
-                        'alt' => $format->getAlt() ?? $originalFilename,
-                    ];
-                }
-
-                $customAttributes = $format->getCustomAttributes();
-                if (!empty($customAttributes)) {
-                    $entry['customAttributes'] = $customAttributes;
-                }
-
-                $result[$formatName] = $entry;
+                $result[$formatName] = $this->processUploadFormat(
+                    $uploadedFile,
+                    $format,
+                    $formatName,
+                    $diskName,
+                    $baseName,
+                    $path,
+                    $originalExtension,
+                    $originalFilename,
+                );
             }
 
             return $result;

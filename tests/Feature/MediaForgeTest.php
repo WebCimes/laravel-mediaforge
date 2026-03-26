@@ -3,7 +3,11 @@
 namespace Webcimes\LaravelMediaforge\Tests\Feature;
 
 use Illuminate\Http\UploadedFile;
+use Illuminate\Support\Facades\Event;
+use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Storage;
+use Webcimes\LaravelMediaforge\Events\ImageFormatsProcessed;
+use Webcimes\LaravelMediaforge\Jobs\ProcessImageFormatsJob;
 use Webcimes\LaravelMediaforge\MediaForge;
 use Webcimes\LaravelMediaforge\ImageFormat;
 use Webcimes\LaravelMediaforge\Tests\TestCase;
@@ -908,5 +912,269 @@ class MediaForgeTest extends TestCase
         foreach ($result as $entry) {
             $this->disk->assertExists($entry['default']['path']);
         }
+    }
+
+    // -------------------------------------------------------------------------
+    // srcset — normalizeFormats expansion
+    // -------------------------------------------------------------------------
+
+    public function test_upload_srcset_expands_into_width_variants(): void
+    {
+        $file = UploadedFile::fake()->image('hero.jpg', 2000, 1000);
+
+        $result = $this->fileService->upload($file, 'public', 'uploads', [
+            ImageFormat::make('hero')->srcset([1920, 1080, 720])->extension('webp'),
+        ]);
+
+        $this->assertArrayHasKey('default', $result);
+        $this->assertArrayHasKey('hero_1920w', $result);
+        $this->assertArrayHasKey('hero_1080w', $result);
+        $this->assertArrayHasKey('hero_720w', $result);
+    }
+
+    public function test_upload_srcset_variants_share_same_folder(): void
+    {
+        $file = UploadedFile::fake()->image('hero.jpg', 2000, 1000);
+
+        $result = $this->fileService->upload($file, 'public', 'uploads', [
+            ImageFormat::make('hero')->srcset([1080, 720])->extension('webp'),
+        ]);
+
+        $this->assertSame(
+            dirname($result['hero_1080w']['path']),
+            dirname($result['hero_720w']['path']),
+        );
+    }
+
+    public function test_upload_srcset_variant_filenames_use_format_name(): void
+    {
+        $file = UploadedFile::fake()->image('hero.jpg', 2000, 1000);
+
+        $result = $this->fileService->upload($file, 'public', 'uploads', [
+            ImageFormat::make('responsive')->srcset([1080, 480])->extension('webp'),
+        ]);
+
+        $this->assertSame('responsive_1080w.webp', basename($result['responsive_1080w']['path']));
+        $this->assertSame('responsive_480w.webp', basename($result['responsive_480w']['path']));
+    }
+
+    public function test_upload_srcset_variant_files_exist_on_disk(): void
+    {
+        $file = UploadedFile::fake()->image('photo.jpg', 2000, 1000);
+
+        $result = $this->fileService->upload($file, 'public', 'uploads', [
+            ImageFormat::make('responsive')->srcset([1080, 720, 480])->extension('webp'),
+        ]);
+
+        $this->disk->assertExists($result['responsive_1080w']['path']);
+        $this->disk->assertExists($result['responsive_720w']['path']);
+        $this->disk->assertExists($result['responsive_480w']['path']);
+    }
+
+    public function test_upload_srcset_does_not_upscale_smaller_image(): void
+    {
+        // Source is 1500px wide; the 1920w variant must NOT be upscaled when using scaleDown
+        $file = UploadedFile::fake()->image('small.jpg', 1500, 800);
+
+        $result = $this->fileService->upload($file, 'public', 'uploads', [
+            ImageFormat::make('r')->srcset([1920, 1080], skipLarger: false)->extension('webp'),
+        ]);
+
+        $this->assertLessThanOrEqual(1500, $result['r_1920w']['width']);
+        $this->assertSame(1080, $result['r_1080w']['width']);
+    }
+
+    public function test_upload_srcset_auto_injects_default(): void
+    {
+        $file = UploadedFile::fake()->image('img.jpg', 800, 600);
+
+        // No explicit 'default' — srcset only
+        $result = $this->fileService->upload($file, 'public', 'uploads', [
+            ImageFormat::make('r')->srcset([720, 480])->extension('webp'),
+        ]);
+
+        $this->assertArrayHasKey('default', $result);
+    }
+
+    public function test_upload_srcset_stores_width_and_height_in_entries(): void
+    {
+        $file = UploadedFile::fake()->image('img.jpg', 2000, 1000);
+
+        $result = $this->fileService->upload($file, 'public', 'uploads', [
+            ImageFormat::make('hero')->srcset([1080])->extension('webp'),
+        ]);
+
+        $this->assertArrayHasKey('width', $result['hero_1080w']);
+        $this->assertArrayHasKey('height', $result['hero_1080w']);
+        $this->assertSame(1080, $result['hero_1080w']['width']);
+    }
+
+    // -------------------------------------------------------------------------
+    // queue
+    // -------------------------------------------------------------------------
+
+    public function test_upload_queued_processes_default_synchronously(): void
+    {
+        Queue::fake();
+
+        $file = UploadedFile::fake()->image('img.jpg', 800, 600);
+
+        $result = $this->fileService->upload($file, 'public', 'uploads', [
+            ImageFormat::make('default')->extension('webp'),
+            ImageFormat::make('thumb')->cover(400, 300)->extension('webp'),
+        ], null, queued: true);
+
+        // 'default' must be fully resolved and on disk
+        $this->assertArrayHasKey('path', $result['default']);
+        $this->assertArrayHasKey('width', $result['default']);
+        $this->disk->assertExists($result['default']['path']);
+    }
+
+    public function test_upload_queued_returns_processing_stub_for_non_default_formats(): void
+    {
+        Queue::fake();
+
+        $file = UploadedFile::fake()->image('img.jpg', 800, 600);
+
+        $result = $this->fileService->upload($file, 'public', 'uploads', [
+            ImageFormat::make('default'),
+            ImageFormat::make('thumb')->cover(400, 300)->extension('webp'),
+        ], null, queued: true);
+
+        $this->assertTrue($result['thumb']['processing']);
+    }
+
+    public function test_upload_queued_dispatches_process_image_formats_job(): void
+    {
+        Queue::fake();
+
+        $file = UploadedFile::fake()->image('img.jpg', 800, 600);
+
+        $this->fileService->upload($file, 'public', 'uploads', [
+            ImageFormat::make('default'),
+            ImageFormat::make('thumb')->cover(400, 300)->extension('webp'),
+        ], null, queued: true);
+
+        Queue::assertPushed(ProcessImageFormatsJob::class);
+    }
+
+    public function test_upload_queued_does_not_dispatch_job_when_only_default(): void
+    {
+        Queue::fake();
+
+        $file = UploadedFile::fake()->image('img.jpg', 800, 600);
+
+        $this->fileService->upload($file, 'public', 'uploads', [
+            ImageFormat::make('default'),
+        ], null, queued: true);
+
+        Queue::assertNothingPushed();
+    }
+
+    public function test_process_image_formats_job_generates_formats_and_fires_event(): void
+    {
+        Event::fake([ImageFormatsProcessed::class]);
+
+        $file = UploadedFile::fake()->image('hero.jpg', 800, 600);
+
+        $storedEntry = $this->fileService->upload($file, 'public', 'uploads', [
+            ImageFormat::make('default'),
+        ]);
+
+        $formatsConfig = [
+            'thumb' => ImageFormat::make('thumb')->cover(200, 200)->extension('webp')->toConfigArray(),
+        ];
+
+        $job = new ProcessImageFormatsJob($storedEntry, $formatsConfig);
+        $job->handle($this->fileService);
+
+        $this->disk->assertExists(dirname($storedEntry['default']['path']) . '/thumb.webp');
+
+        Event::assertDispatched(ImageFormatsProcessed::class, function ($event) use ($storedEntry) {
+            return $event->defaultPath === $storedEntry['default']['path']
+                && isset($event->entry['thumb']);
+        });
+    }
+
+    public function test_upload_queued_with_srcset_dispatches_all_variants_as_job(): void
+    {
+        Queue::fake();
+
+        $file = UploadedFile::fake()->image('img.jpg', 800, 600);
+
+        $result = $this->fileService->upload($file, 'public', 'uploads', [
+            ImageFormat::make('r')->srcset([720, 480])->extension('webp'),
+        ], null, queued: true);
+
+        // All srcset variants are stubs
+        $this->assertTrue($result['r_720w']['processing']);
+        $this->assertTrue($result['r_480w']['processing']);
+
+        // One job dispatched for both variants
+        Queue::assertPushed(ProcessImageFormatsJob::class, 1);
+    }
+
+    // -------------------------------------------------------------------------
+    // srcset skipLarger
+    // -------------------------------------------------------------------------
+
+    public function test_upload_srcset_skip_larger_omits_variants_wider_than_source(): void
+    {
+        // Source is 600×400 — widths 1920, 1080 and 720 are larger, only 480 fits
+        $file = UploadedFile::fake()->image('img.jpg', 600, 400);
+
+        $result = $this->fileService->upload($file, 'public', 'uploads', [
+            ImageFormat::make('hero')->srcset([1920, 1080, 720, 480], skipLarger: true)->extension('webp'),
+        ]);
+
+        $this->assertArrayNotHasKey('hero_1920w', $result);
+        $this->assertArrayNotHasKey('hero_1080w', $result);
+        $this->assertArrayNotHasKey('hero_720w', $result);
+        $this->assertArrayHasKey('hero_480w', $result);
+        $this->disk->assertExists($result['hero_480w']['path']);
+    }
+
+    public function test_upload_srcset_without_skip_larger_creates_all_variants(): void
+    {
+        $file = UploadedFile::fake()->image('img.jpg', 600, 400);
+
+        $result = $this->fileService->upload($file, 'public', 'uploads', [
+            ImageFormat::make('hero')->srcset([1920, 480], skipLarger: false)->extension('webp'),
+        ]);
+
+        // Both variants are created (scaleDown caps at source width, but entries are still there)
+        $this->assertArrayHasKey('hero_1920w', $result);
+        $this->assertArrayHasKey('hero_480w', $result);
+    }
+
+    public function test_upload_srcset_skip_larger_exact_source_width_is_kept(): void
+    {
+        // A variant at exactly the source width should NOT be skipped
+        $file = UploadedFile::fake()->image('img.jpg', 720, 540);
+
+        $result = $this->fileService->upload($file, 'public', 'uploads', [
+            ImageFormat::make('r')->srcset([720, 480], skipLarger: true)->extension('webp'),
+        ]);
+
+        $this->assertArrayHasKey('r_720w', $result);
+        $this->assertArrayHasKey('r_480w', $result);
+    }
+
+    public function test_upload_srcset_skip_larger_queued_omits_stubs_for_skipped_variants(): void
+    {
+        Queue::fake();
+
+        // Source 400px wide — only 300w variant should be dispatched for queued processing
+        $file = UploadedFile::fake()->image('img.jpg', 400, 300);
+
+        $result = $this->fileService->upload($file, 'public', 'uploads', [
+            ImageFormat::make('r')->srcset([1920, 300], skipLarger: true)->extension('webp'),
+        ], null, queued: true);
+
+        // 1920 should be absent — no stub and no job entry
+        $this->assertArrayNotHasKey('r_1920w', $result);
+        // 300 fits — should be a stub
+        $this->assertArrayHasKey('r_300w', $result);
+        $this->assertTrue($result['r_300w']['processing']);
     }
 }

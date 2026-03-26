@@ -53,4 +53,25 @@ return [
         'y' => 0,
         'opacity' => 75,
     ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Queue Configuration
+    |--------------------------------------------------------------------------
+    | When upload(..., queued: true) is used (or the Filament component's
+    | ->queued() option), non-default image formats are processed in a
+    | background queue job. The 'default' format is always synchronous.
+    |
+    | Listen to \Webcimes\LaravelMediaforge\Events\ImageFormatsProcessed to
+    | update your model once the job completes:
+    |
+    |   Event::listen(ImageFormatsProcessed::class, function ($event) {
+    |       // $event->defaultPath  → path of the 'default' format (lookup key)
+    |       // $event->entry        → complete entry with all format keys
+    |   });
+    */
+    'queue' => [
+        'connection' => env('MEDIAFORGE_QUEUE_CONNECTION', null),  // null = default connection
+        'name'       => env('MEDIAFORGE_QUEUE_NAME', 'default'),
+    ],
 ];

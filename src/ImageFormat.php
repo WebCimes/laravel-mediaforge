@@ -34,6 +34,10 @@ class ImageFormat
 
     private ?string $alt = null;
 
+    private ?array $srcsetWidths = null;
+
+    private bool $srcsetSkipLarger = false;
+
     public function __construct(private readonly string $name = 'default') {}
 
     /**
@@ -292,6 +296,95 @@ class ImageFormat
         return $this;
     }
 
+    /**
+     * Generate multiple width variants for responsive images (srcset).
+     * Each width produces an independent format named `{name}_{width}w` that uses `scaleDown`
+     * — meaning images smaller than a given width are never upscaled.
+     *
+     * All other settings (extension, quality, watermark, etc.) are inherited by every variant.
+     * A `default` format is still auto-injected by MediaForge if not explicitly provided.
+     *
+     * Example:
+     * ```php
+     * ImageFormat::make('responsive')->srcset([1920, 1080, 720, 480])->extension('webp')->quality(80)
+     * ```
+     * Produces: `responsive_1920w`, `responsive_1080w`, `responsive_720w`, `responsive_480w`.
+     *
+     * Building a srcset attribute:
+     * ```php
+     * $srcset = collect($entry)
+     *     ->filter(fn($v, $k) => str_ends_with($k, 'w') && isset($v['width']))
+     *     ->map(fn($v) => Storage::disk($v['disk'])->url($v['path']) . ' ' . $v['width'] . 'w')
+     *     ->implode(', ');
+     * ```
+     *
+     * Variants wider than the source are skipped by default (`$skipLarger = true`) — no file is
+     * written and no entry is stored for those widths. The `default` format always serves as
+     * fallback in the `src` attribute:
+     * ```php
+     * <img src="{{ Storage::disk($entry['default']['disk'])->url($entry['default']['path']) }}"
+     *      srcset="{{ $srcset }}"  {{-- may be empty if source is smaller than all widths --}}
+     *      alt="...">
+     * ```
+     *
+     * @param int[]  $widths      List of target widths in pixels. Always scaled with `scaleDown`
+     *                            (never upscales, preserves aspect ratio, height auto-computed).
+     * @param bool   $skipLarger  Skip variants whose target width exceeds the source image width.
+     *                            Defaults to `true`. Set to `false` to always write all variants
+     *                            (with `scaleDown` they will be capped at the source width).
+     */
+    public function srcset(array $widths, bool $skipLarger = true): static
+    {
+        $this->srcsetWidths = array_values(array_filter($widths, fn($w) => is_int($w) && $w > 0));
+        $this->srcsetSkipLarger = $skipLarger;
+
+        return $this;
+    }
+
+    public function isSrcset(): bool
+    {
+        return $this->srcsetWidths !== null;
+    }
+
+    public function getSrcsetWidths(): ?array
+    {
+        return $this->srcsetWidths;
+    }
+
+    public function isSrcsetSkipLarger(): bool
+    {
+        return $this->srcsetSkipLarger;
+    }
+
+    /**
+     * Create an expanded single-width variant of this srcset format.
+     * Inherits all settings; overrides resize to `scaleDown($width)` (never upscales).
+     * Internal — called by MediaForge::normalizeFormats().
+     */
+    public function expandForSrcset(int $width): static
+    {
+        $format = static::make($this->name . '_' . $width . 'w');
+
+        if ($this->disk !== null)      { $format->disk = $this->disk; }
+        if ($this->path !== null)      { $format->path = $this->path; }
+        $format->suffix = $this->suffix;
+        if ($this->extension !== null) { $format->extension = $this->extension; }
+        if ($this->filename !== null)  { $format->filename = $this->filename . '_' . $width . 'w'; }
+        if ($this->quality !== null)   { $format->quality = $this->quality; }
+        if ($this->text !== null)      { $format->text = $this->text; $format->textOptions = $this->textOptions; }
+        if ($this->watermark !== null) { $format->watermark = $this->watermark; $format->watermarkOptions = $this->watermarkOptions; }
+        $format->customAttributes = $this->customAttributes;
+        if ($this->alt !== null)       { $format->alt = $this->alt; }
+
+        // Always scaleDown for srcset variants (preserves aspect ratio, never upscales)
+        $format->resizeType = 'scaleDown';
+        $format->width = $width;
+        $format->height = null;
+        $format->srcsetSkipLarger = $this->srcsetSkipLarger;
+
+        return $format;
+    }
+
     public function getName(): string
     {
         return $this->name;
@@ -423,6 +516,12 @@ class ImageFormat
         if ($this->alt !== null) {
             $config['alt'] = $this->alt;
         }
+        if ($this->srcsetWidths !== null) {
+            $config['srcsetWidths'] = $this->srcsetWidths;
+            if (!$this->srcsetSkipLarger) {
+                $config['srcsetSkipLarger'] = false; // save only when non-default (false)
+            }
+        }
 
         return $config;
     }
@@ -470,6 +569,14 @@ class ImageFormat
         }
         if (isset($config['alt'])) {
             $format->alt = $config['alt'];
+        }
+        if (isset($config['srcsetWidths'])) {
+            $format->srcsetWidths = $config['srcsetWidths'];
+            // API default for srcset parent formats is true; only saved when false
+            $format->srcsetSkipLarger = $config['srcsetSkipLarger'] ?? true;
+        } elseif (isset($config['srcsetSkipLarger'])) {
+            // Expanded formats (no srcsetWidths) may have it saved when false
+            $format->srcsetSkipLarger = $config['srcsetSkipLarger'];
         }
 
         return $format;

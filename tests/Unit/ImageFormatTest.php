@@ -175,4 +175,175 @@ class ImageFormatTest extends TestCase
 
         $this->assertSame('Rebuilt alt', $rebuilt->getAlt());
     }
+
+    // -------------------------------------------------------------------------
+    // make() default name
+    // -------------------------------------------------------------------------
+
+    public function test_make_without_argument_uses_default_name(): void
+    {
+        $this->assertSame('default', ImageFormat::make()->getName());
+    }
+
+    // -------------------------------------------------------------------------
+    // srcset
+    // -------------------------------------------------------------------------
+
+    public function test_srcset_sets_widths(): void
+    {
+        $format = ImageFormat::make('hero')->srcset([1920, 1080, 720]);
+
+        $this->assertSame([1920, 1080, 720], $format->getSrcsetWidths());
+    }
+
+    public function test_is_srcset_returns_true_when_set(): void
+    {
+        $this->assertTrue(ImageFormat::make('hero')->srcset([1920])->isSrcset());
+    }
+
+    public function test_is_srcset_returns_false_by_default(): void
+    {
+        $this->assertFalse(ImageFormat::make('hero')->isSrcset());
+    }
+
+    public function test_srcset_filters_invalid_widths(): void
+    {
+        $format = ImageFormat::make('hero')->srcset([1920, 0, -100, 720]);
+
+        $this->assertSame([1920, 720], $format->getSrcsetWidths());
+    }
+
+    public function test_expand_for_srcset_uses_scale_down(): void
+    {
+        $expanded = ImageFormat::make('hero')->srcset([1080])->expandForSrcset(1080);
+
+        $this->assertSame('scaleDown', $expanded->getResizeType());
+        $this->assertSame(1080, $expanded->getWidth());
+        $this->assertNull($expanded->getHeight());
+    }
+
+    public function test_expand_for_srcset_uses_correct_name(): void
+    {
+        $expanded = ImageFormat::make('hero')->srcset([720])->expandForSrcset(720);
+
+        $this->assertSame('hero_720w', $expanded->getName());
+    }
+
+    public function test_expand_for_srcset_inherits_extension_and_quality(): void
+    {
+        $parent = ImageFormat::make('hero')
+            ->srcset([720])
+            ->extension('webp')
+            ->quality(80);
+
+        $expanded = $parent->expandForSrcset(720);
+
+        $this->assertSame('webp', $expanded->getExtension());
+        $this->assertSame(80, $expanded->getQuality());
+    }
+
+    public function test_expand_for_srcset_inherits_custom_filename_with_width_suffix(): void
+    {
+        $parent = ImageFormat::make('hero')->srcset([480])->filename('img');
+
+        $expanded = $parent->expandForSrcset(480);
+
+        $this->assertSame('img_480w', $expanded->getFilename());
+    }
+
+    public function test_expand_for_srcset_is_not_itself_srcset(): void
+    {
+        $expanded = ImageFormat::make('hero')->srcset([1080])->expandForSrcset(1080);
+
+        $this->assertFalse($expanded->isSrcset());
+    }
+
+    public function test_to_config_array_includes_srcset_widths(): void
+    {
+        $config = ImageFormat::make('hero')->srcset([1920, 1080])->toConfigArray();
+
+        $this->assertSame([1920, 1080], $config['srcsetWidths']);
+    }
+
+    public function test_srcset_absent_from_config_array_when_not_set(): void
+    {
+        $config = ImageFormat::make('hero')->toConfigArray();
+
+        $this->assertArrayNotHasKey('srcsetWidths', $config);
+    }
+
+    public function test_from_config_array_restores_srcset_widths(): void
+    {
+        $format = ImageFormat::fromConfigArray('hero', ['srcsetWidths' => [1920, 1080]]);
+
+        $this->assertTrue($format->isSrcset());
+        $this->assertSame([1920, 1080], $format->getSrcsetWidths());
+    }
+
+    public function test_srcset_skip_larger_defaults_to_true(): void
+    {
+        $format = ImageFormat::make('hero')->srcset([1920, 1080]);
+
+        $this->assertTrue($format->isSrcsetSkipLarger());
+    }
+
+    public function test_srcset_skip_larger_can_be_disabled(): void
+    {
+        $format = ImageFormat::make('hero')->srcset([1920, 1080], skipLarger: false);
+
+        $this->assertFalse($format->isSrcsetSkipLarger());
+    }
+
+    public function test_expand_for_srcset_propagates_skip_larger(): void
+    {
+        $expanded = ImageFormat::make('hero')->srcset([1920], skipLarger: false)->expandForSrcset(1920);
+
+        $this->assertFalse($expanded->isSrcsetSkipLarger());
+    }
+
+    public function test_expand_for_srcset_skip_larger_true_by_default(): void
+    {
+        $expanded = ImageFormat::make('hero')->srcset([1920])->expandForSrcset(1920);
+
+        $this->assertTrue($expanded->isSrcsetSkipLarger());
+    }
+
+    public function test_to_config_array_omits_skip_larger_when_default_true(): void
+    {
+        $config = ImageFormat::make('hero')->srcset([1920])->toConfigArray();
+
+        $this->assertArrayNotHasKey('srcsetSkipLarger', $config);
+    }
+
+    public function test_to_config_array_includes_skip_larger_when_false(): void
+    {
+        $config = ImageFormat::make('hero')->srcset([1920], skipLarger: false)->toConfigArray();
+
+        $this->assertFalse($config['srcsetSkipLarger']);
+    }
+
+    public function test_expanded_format_config_persists_skip_larger_false(): void
+    {
+        // Expanded formats have no srcsetWidths → srcsetSkipLarger is not serialized (irrelevant
+        // in queue context since regenerate() never checks it). Property default (false) is used.
+        $expanded = ImageFormat::make('hero')->srcset([1920], skipLarger: false)->expandForSrcset(1920);
+        $config = $expanded->toConfigArray();
+
+        $this->assertArrayNotHasKey('srcsetSkipLarger', $config);
+    }
+
+    public function test_from_config_array_restores_skip_larger_on_expanded_format(): void
+    {
+        $format = ImageFormat::fromConfigArray('hero_1920w', ['resizeType' => 'scaleDown', 'width' => 1920, 'height' => null, 'srcsetSkipLarger' => false]);
+
+        $this->assertFalse($format->isSrcsetSkipLarger());
+    }
+
+    public function test_from_config_array_skip_larger_defaults_to_true(): void
+    {
+        // Restored from a srcset parent format config where skipLarger was not saved (= API default true)
+        $format = ImageFormat::fromConfigArray('hero', ['srcsetWidths' => [1920, 1080]]);
+
+        $this->assertTrue($format->isSrcsetSkipLarger());
+    }
 }
