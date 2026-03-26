@@ -61,6 +61,8 @@ class MediaForgeFileUpload extends FileUpload
             MediaForgeFileUpload $component,
             TemporaryUploadedFile $file,
         ): ?string {
+            $record = $component->getRecord();
+
             $result = app(MediaForge::class)->upload(
                 $file,
                 $component->getDiskName(),
@@ -68,6 +70,8 @@ class MediaForgeFileUpload extends FileUpload
                 $component->getImageFormats(),
                 null,
                 $component->isQueued(),
+                $record,
+                $record ? $component->getName() : null,
             );
 
             return $result ? json_encode($result) : null;
@@ -147,8 +151,10 @@ class MediaForgeFileUpload extends FileUpload
      * Process non-default image formats in a background queue job.
      * The 'default' format is always processed synchronously.
      *
-     * Listen to \Webcimes\LaravelMediaforge\Events\ImageFormatsProcessed
-     * to update your model once the job completes.
+     * When the record already exists (edit forms), the model column is updated automatically
+     * once the job completes — no listener required.
+     * On create forms (record not yet persisted), listen to
+     * \Webcimes\LaravelMediaforge\Events\ImageFormatsProcessed as fallback.
      */
     public function queued(bool $queued = true): static
     {

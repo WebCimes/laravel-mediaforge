@@ -10,6 +10,7 @@ use Webcimes\LaravelMediaforge\Events\ImageFormatsProcessed;
 use Webcimes\LaravelMediaforge\Jobs\ProcessImageFormatsJob;
 use Webcimes\LaravelMediaforge\MediaForge;
 use Webcimes\LaravelMediaforge\ImageFormat;
+use Webcimes\LaravelMediaforge\Tests\Fixtures\TestMediaModel;
 use Webcimes\LaravelMediaforge\Tests\TestCase;
 
 class MediaForgeTest extends TestCase
@@ -1176,5 +1177,131 @@ class MediaForgeTest extends TestCase
         // 300 fits — should be a stub
         $this->assertArrayHasKey('r_300w', $result);
         $this->assertTrue($result['r_300w']['processing']);
+    }
+
+    // -------------------------------------------------------------------------
+    // queue — handleFiles() + auto-update model
+    // -------------------------------------------------------------------------
+
+    public function test_handle_files_queued_dispatches_job(): void
+    {
+        Queue::fake();
+
+        $file = UploadedFile::fake()->image('photo.jpg', 800, 600);
+
+        $result = $this->fileService->handleFiles(
+            diskName: 'public',
+            path: 'uploads',
+            uploadedFiles: [$file],
+            filesToDeleteIndex: null,
+            imageFormats: [
+                ImageFormat::make('default'),
+                ImageFormat::make('thumb')->cover(400, 300)->extension('webp'),
+            ],
+            queued: true,
+        );
+
+        $this->assertNotNull($result);
+        $this->assertCount(1, $result);
+        // 'default' must be resolved
+        $this->assertArrayHasKey('path', $result[0]['default']);
+        // 'thumb' must be a processing stub
+        $this->assertTrue($result[0]['thumb']['processing']);
+        Queue::assertPushed(ProcessImageFormatsJob::class);
+    }
+
+    public function test_process_image_formats_job_auto_updates_model_single_entry(): void
+    {
+        Event::fake([ImageFormatsProcessed::class]);
+
+        \Illuminate\Support\Facades\Schema::create('test_media_models', function ($table) {
+            $table->id();
+            $table->json('media')->nullable();
+        });
+
+        try {
+            $file = UploadedFile::fake()->image('hero.jpg', 800, 600);
+            $storedEntry = $this->fileService->upload($file, 'public', 'uploads', [
+                ImageFormat::make('default'),
+            ]);
+
+            // Simulate what is stored initially: complete default + processing stub for thumb
+            $initialData = array_merge($storedEntry, ['thumb' => ['processing' => true, 'disk' => 'public']]);
+            $model = TestMediaModel::create(['media' => $initialData]);
+
+            $formatsConfig = [
+                'thumb' => ImageFormat::make('thumb')->cover(200, 200)->extension('webp')->toConfigArray(),
+            ];
+
+            $job = new ProcessImageFormatsJob(
+                $storedEntry,
+                $formatsConfig,
+                TestMediaModel::class,
+                $model->id,
+                'media',
+            );
+            $job->handle($this->fileService);
+
+            $model->refresh();
+
+            // 'thumb' must now be a real processed entry
+            $this->assertArrayHasKey('thumb', $model->media);
+            $this->assertArrayNotHasKey('processing', $model->media['thumb']);
+            $this->assertArrayHasKey('path', $model->media['thumb']);
+            $this->disk->assertExists($model->media['thumb']['path']);
+        } finally {
+            \Illuminate\Support\Facades\Schema::dropIfExists('test_media_models');
+        }
+    }
+
+    public function test_process_image_formats_job_auto_updates_model_list_entry(): void
+    {
+        Event::fake([ImageFormatsProcessed::class]);
+
+        \Illuminate\Support\Facades\Schema::create('test_media_models', function ($table) {
+            $table->id();
+            $table->json('media')->nullable();
+        });
+
+        try {
+            $file = UploadedFile::fake()->image('hero.jpg', 800, 600);
+            $storedEntry = $this->fileService->upload($file, 'public', 'uploads', [
+                ImageFormat::make('default'),
+            ]);
+
+            // Column stores a list of entries (handleFiles / Filament multi-file scenario)
+            $otherEntry = ['default' => ['disk' => 'public', 'path' => 'uploads/other/default.jpg', 'width' => 100, 'height' => 100, 'alt' => 'other']];
+            $initialData = [
+                $otherEntry,
+                array_merge($storedEntry, ['thumb' => ['processing' => true, 'disk' => 'public']]),
+            ];
+            $model = TestMediaModel::create(['media' => $initialData]);
+
+            $formatsConfig = [
+                'thumb' => ImageFormat::make('thumb')->cover(200, 200)->extension('webp')->toConfigArray(),
+            ];
+
+            $job = new ProcessImageFormatsJob(
+                $storedEntry,
+                $formatsConfig,
+                TestMediaModel::class,
+                $model->id,
+                'media',
+            );
+            $job->handle($this->fileService);
+
+            $model->refresh();
+
+            // index 0 (unrelated entry) must be untouched
+            $this->assertSame('uploads/other/default.jpg', $model->media[0]['default']['path']);
+
+            // index 1 must have 'thumb' replaced with the real processed entry
+            $this->assertArrayHasKey('thumb', $model->media[1]);
+            $this->assertArrayNotHasKey('processing', $model->media[1]['thumb']);
+            $this->assertArrayHasKey('path', $model->media[1]['thumb']);
+            $this->disk->assertExists($model->media[1]['thumb']['path']);
+        } finally {
+            \Illuminate\Support\Facades\Schema::dropIfExists('test_media_models');
+        }
     }
 }

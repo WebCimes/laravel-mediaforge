@@ -7,8 +7,14 @@ class ImageFormatsProcessed
     /**
      * Fired after a queued upload finishes processing all non-default formats.
      *
-     * Use `$defaultPath` as a lookup key to find the model that stored the initial
-     * (partial) entry, then update it with the complete `$entry`.
+     * **Preferred approach — auto-update via model binding:**
+     * Pass `model:` and `modelColumn:` to `upload()` or `handleFiles()`. The job will
+     * find the stored entry by `$defaultPath` and replace it with the complete `$entry`,
+     * no listener required. Works automatically in Filament edit forms.
+     *
+     * **Fallback — use this event when:**
+     * - The record was not yet persisted at upload time (Filament create forms)
+     * - You need side effects beyond a simple column update (broadcast, webhooks, logs)
      *
      * Example listener:
      * ```php

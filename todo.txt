@@ -1,1 +1,4 @@
 queue avec handleFiles ?
+srcset mode auto ? 
+srcset avec poucentage ? 
+srcset dans config ?

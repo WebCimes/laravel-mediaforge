@@ -241,6 +241,8 @@ class MediaForge
         ImageFormat|array|null $imageFormats = null,
         ?string $customBaseName = null,
         bool $queued = false,
+        ?\Illuminate\Database\Eloquent\Model $model = null,
+        ?string $modelColumn = null,
     ): array|null {
         $disk = $this->filesystem->disk($diskName);
 
@@ -318,6 +320,9 @@ class MediaForge
                     $dispatched = ProcessImageFormatsJob::dispatch(
                         ['default' => $result['default']],
                         $nonDefaultFormatsConfig,
+                        $model ? get_class($model) : null,
+                        $model?->getKey(),
+                        $modelColumn,
                     )->onQueue($queueName);
 
                     if ($connection) {
@@ -572,6 +577,9 @@ class MediaForge
         ?array $existingFiles = null,
         ImageFormat|array|null $imageFormats = null,
         ?string $customBaseName = null,
+        bool $queued = false,
+        ?\Illuminate\Database\Eloquent\Model $model = null,
+        ?string $modelColumn = null,
     ): array|null {
         $files = $existingFiles ?? [];
         $uploadedFilesArray = [];
@@ -595,6 +603,9 @@ class MediaForge
                     $path,
                     $imageFormats,
                     $customBaseName,
+                    $queued,
+                    $model,
+                    $modelColumn,
                 );
             }
         }
