@@ -298,17 +298,29 @@ class ImageFormat
 
     /**
      * Generate multiple width variants for responsive images (srcset).
-     * Each width produces an independent format named `{name}_{width}w` that uses `scaleDown`
-     * — meaning images smaller than a given width are never upscaled.
+     * Each width produces an independent format named `{name}_{width}w`.
      *
-     * All other settings (extension, quality, watermark, etc.) are inherited by every variant.
+     * All other settings (extension, quality, watermark, text, etc.) are inherited by every variant.
      * A `default` format is still auto-injected by MediaForge if not explicitly provided.
      *
-     * Example:
+     * **Resize type inheritance:**
+     * - If a resize method was called (`cover`, `scale`, `resize`, etc.), every variant uses that
+     *   same resize type. When both width and height are defined, the height is scaled proportionally
+     *   to match the target width (e.g. `cover(1000, 500)` at 400w → `cover(400, 200)`).
+     * - If no resize method was called, variants fall back to `scaleDown` — preserves aspect ratio
+     *   and never upscales.
+     *
+     * Example — square thumbnails at multiple sizes:
      * ```php
-     * ImageFormat::make('responsive')->srcset([1920, 1080, 720, 480])->extension('webp')->quality(80)
+     * ImageFormat::make('thumb')->cover(1000, 1000)->srcset([200, 400, 800])->extension('webp')
      * ```
-     * Produces: `responsive_1920w`, `responsive_1080w`, `responsive_720w`, `responsive_480w`.
+     * Produces: `thumb_200w` (cover 200×200), `thumb_400w` (cover 400×400), `thumb_800w` (cover 800×800).
+     *
+     * Example — proportional downscale:
+     * ```php
+     * ImageFormat::make('hero')->srcset([1920, 1080, 720, 480])->extension('webp')->quality(80)
+     * ```
+     * Produces: `hero_1920w`, `hero_1080w`, `hero_720w`, `hero_480w` (all `scaleDown`).
      *
      * Building a srcset attribute:
      * ```php
@@ -327,11 +339,9 @@ class ImageFormat
      *      alt="...">
      * ```
      *
-     * @param int[]  $widths      List of target widths in pixels. Always scaled with `scaleDown`
-     *                            (never upscales, preserves aspect ratio, height auto-computed).
+     * @param int[]  $widths      List of target widths in pixels.
      * @param bool   $skipLarger  Skip variants whose target width exceeds the source image width.
-     *                            Defaults to `true`. Set to `false` to always write all variants
-     *                            (with `scaleDown` they will be capped at the source width).
+     *                            Defaults to `true`. Set to `false` to always write all variants.
      */
     public function srcset(array $widths, bool $skipLarger = true): static
     {
@@ -357,29 +367,48 @@ class ImageFormat
     }
 
     /**
+     * Return a clone of this format without srcset settings.
+     * Used to generate the base format entry when srcset() is configured.
+     * Internal — called by MediaForge::normalizeFormats().
+     */
+    public function toBaseFormat(): static
+    {
+        $clone = clone $this;
+        $clone->srcsetWidths = null;
+        $clone->srcsetSkipLarger = false; // base format is never subject to skipLarger filtering
+
+        return $clone;
+    }
+
+    /**
      * Create an expanded single-width variant of this srcset format.
-     * Inherits all settings; overrides resize to `scaleDown($width)` (never upscales).
+     * Inherits all settings via toConfigArray()/fromConfigArray(); scales height proportionally.
      * Internal — called by MediaForge::normalizeFormats().
      */
     public function expandForSrcset(int $width): static
     {
-        $format = static::make($this->name . '_' . $width . 'w');
+        $config = $this->toConfigArray();
+        unset($config['srcsetWidths'], $config['srcsetSkipLarger']);
 
-        if ($this->disk !== null)      { $format->disk = $this->disk; }
-        if ($this->path !== null)      { $format->path = $this->path; }
-        $format->suffix = $this->suffix;
-        if ($this->extension !== null) { $format->extension = $this->extension; }
-        if ($this->filename !== null)  { $format->filename = $this->filename . '_' . $width . 'w'; }
-        if ($this->quality !== null)   { $format->quality = $this->quality; }
-        if ($this->text !== null)      { $format->text = $this->text; $format->textOptions = $this->textOptions; }
-        if ($this->watermark !== null) { $format->watermark = $this->watermark; $format->watermarkOptions = $this->watermarkOptions; }
-        $format->customAttributes = $this->customAttributes;
-        if ($this->alt !== null)       { $format->alt = $this->alt; }
+        if ($this->resizeType !== null) {
+            // Respect the configured resize type; scale the height proportionally when both dimensions are set
+            $config['resizeType'] = $this->resizeType;
+            $config['width'] = $width;
+            $config['height'] = ($this->width !== null && $this->height !== null)
+                ? (int) round($width * $this->height / $this->width)
+                : null;
+        } else {
+            // No resize type set: default to scaleDown (preserve aspect ratio, never upscale)
+            $config['resizeType'] = 'scaleDown';
+            $config['width'] = $width;
+            $config['height'] = null;
+        }
 
-        // Always scaleDown for srcset variants (preserves aspect ratio, never upscales)
-        $format->resizeType = 'scaleDown';
-        $format->width = $width;
-        $format->height = null;
+        if ($this->filename !== null) {
+            $config['filename'] = $this->filename . '_' . $width . 'w';
+        }
+
+        $format = static::fromConfigArray($this->name . '_' . $width . 'w', $config);
         $format->srcsetSkipLarger = $this->srcsetSkipLarger;
 
         return $format;
@@ -485,6 +514,12 @@ class ImageFormat
     {
         $config = [];
 
+        if ($this->disk !== null) {
+            $config['disk'] = $this->disk;
+        }
+        if ($this->path !== null) {
+            $config['path'] = $this->path;
+        }
         if ($this->extension !== null) {
             $config['extension'] = $this->extension;
         }

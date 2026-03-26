@@ -222,6 +222,35 @@ class ImageFormatTest extends TestCase
         $this->assertNull($expanded->getHeight());
     }
 
+    public function test_expand_for_srcset_respects_cover_resize_type(): void
+    {
+        $expanded = ImageFormat::make('thumb')->cover(1000, 1000)->srcset([400])->expandForSrcset(400);
+
+        $this->assertSame('cover', $expanded->getResizeType());
+        $this->assertSame(400, $expanded->getWidth());
+        $this->assertSame(400, $expanded->getHeight());
+    }
+
+    public function test_expand_for_srcset_scales_height_proportionally(): void
+    {
+        // cover(1200, 400) → ratio 1/3 → at 600w height should be 200
+        $expanded = ImageFormat::make('banner')->cover(1200, 400)->srcset([600])->expandForSrcset(600);
+
+        $this->assertSame('cover', $expanded->getResizeType());
+        $this->assertSame(600, $expanded->getWidth());
+        $this->assertSame(200, $expanded->getHeight());
+    }
+
+    public function test_expand_for_srcset_respects_resize_type_without_height(): void
+    {
+        // scale(1200) — height is null, should stay null on variants
+        $expanded = ImageFormat::make('hero')->scale(1200)->srcset([600])->expandForSrcset(600);
+
+        $this->assertSame('scale', $expanded->getResizeType());
+        $this->assertSame(600, $expanded->getWidth());
+        $this->assertNull($expanded->getHeight());
+    }
+
     public function test_expand_for_srcset_uses_correct_name(): void
     {
         $expanded = ImageFormat::make('hero')->srcset([720])->expandForSrcset(720);
@@ -256,6 +285,50 @@ class ImageFormatTest extends TestCase
         $expanded = ImageFormat::make('hero')->srcset([1080])->expandForSrcset(1080);
 
         $this->assertFalse($expanded->isSrcset());
+    }
+
+    // -------------------------------------------------------------------------
+    // asBase()
+    // -------------------------------------------------------------------------
+
+    public function test_to_base_format_returns_same_name(): void
+    {
+        $base = ImageFormat::make('test')->cover(1000, 1000)->srcset([200, 400])->toBaseFormat();
+
+        $this->assertSame('test', $base->getName());
+    }
+
+    public function test_to_base_format_is_not_srcset(): void
+    {
+        $base = ImageFormat::make('test')->srcset([200, 400])->toBaseFormat();
+
+        $this->assertFalse($base->isSrcset());
+        $this->assertNull($base->getSrcsetWidths());
+    }
+
+    public function test_to_base_format_preserves_resize_type_and_dimensions(): void
+    {
+        $base = ImageFormat::make('test')->cover(1000, 500)->srcset([200])->toBaseFormat();
+
+        $this->assertSame('cover', $base->getResizeType());
+        $this->assertSame(1000, $base->getWidth());
+        $this->assertSame(500, $base->getHeight());
+    }
+
+    public function test_to_base_format_preserves_extension_and_quality(): void
+    {
+        $base = ImageFormat::make('test')->extension('webp')->quality(75)->srcset([200])->toBaseFormat();
+
+        $this->assertSame('webp', $base->getExtension());
+        $this->assertSame(75, $base->getQuality());
+    }
+
+    public function test_to_base_format_skip_larger_is_always_false(): void
+    {
+        // base format must never be filtered by the skipLarger guard in normalizeFormats()
+        $base = ImageFormat::make('test')->cover(1000, 1000)->srcset([200], skipLarger: true)->toBaseFormat();
+
+        $this->assertFalse($base->isSrcsetSkipLarger());
     }
 
     public function test_to_config_array_includes_srcset_widths(): void

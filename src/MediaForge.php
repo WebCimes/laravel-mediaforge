@@ -30,6 +30,8 @@ class MediaForge
 
         foreach (is_array($imageFormats) ? $imageFormats : [$imageFormats] as $format) {
             if ($format->isSrcset()) {
+                // Add the base format (same name/resize settings, no srcset expansion)
+                $formats[$format->getName()] = $format->toBaseFormat();
                 foreach ($format->getSrcsetWidths() as $width) {
                     $expanded = $format->expandForSrcset($width);
                     $formats[$expanded->getName()] = $expanded;
