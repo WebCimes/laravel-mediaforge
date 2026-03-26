@@ -34,16 +34,18 @@ class ImageFormat
 
     private ?string $alt = null;
 
-    public function __construct(private readonly string $name) {}
+    public function __construct(private readonly string $name = 'default') {}
 
-    public static function make(string $name): static
+    /**
+     * Create a new ImageFormat instance.
+     * The `$name` identifies the format (e.g. `'default'`, `'thumb'`) and is used
+     * as the filename and as the key in the stored media JSON.
+     *
+     * Example: `ImageFormat::make('thumb')->cover(400, 300)->extension('webp')`
+     */
+    public static function make(string $name = 'default'): static
     {
         return new static($name);
-    }
-
-    public function getName(): string
-    {
-        return $this->name;
     }
 
     /**
@@ -288,6 +290,11 @@ class ImageFormat
         $this->alt = $alt;
 
         return $this;
+    }
+
+    public function getName(): string
+    {
+        return $this->name;
     }
 
     public function getDisk(): ?string
