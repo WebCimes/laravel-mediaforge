@@ -38,7 +38,7 @@ class ImageFormat
 
     private bool $srcsetSkipLarger = false;
 
-    public function __construct(private readonly string $name = 'default') {}
+    public function __construct(private string $name = 'default') {}
 
     /**
      * Create a new ImageFormat instance.
@@ -382,36 +382,33 @@ class ImageFormat
 
     /**
      * Create an expanded single-width variant of this srcset format.
-     * Inherits all settings via toConfigArray()/fromConfigArray(); scales height proportionally.
+     * Clones all settings and adjusts name, dimensions and filename for the target width.
      * Internal — called by MediaForge::normalizeFormats().
      */
     public function expandForSrcset(int $width): static
     {
-        $config = $this->toConfigArray();
-        unset($config['srcsetWidths'], $config['srcsetSkipLarger']);
+        $clone = clone $this;
+        $clone->name = $this->name . '_' . $width . 'w';
+        $clone->srcsetWidths = null;
+
+        if ($this->filename !== null) {
+            $clone->filename = $this->filename . '_' . $width . 'w';
+        }
 
         if ($this->resizeType !== null) {
             // Respect the configured resize type; scale the height proportionally when both dimensions are set
-            $config['resizeType'] = $this->resizeType;
-            $config['width'] = $width;
-            $config['height'] = ($this->width !== null && $this->height !== null)
+            $clone->width = $width;
+            $clone->height = ($this->width !== null && $this->height !== null)
                 ? (int) round($width * $this->height / $this->width)
                 : null;
         } else {
             // No resize type set: default to scaleDown (preserve aspect ratio, never upscale)
-            $config['resizeType'] = 'scaleDown';
-            $config['width'] = $width;
-            $config['height'] = null;
+            $clone->resizeType = 'scaleDown';
+            $clone->width = $width;
+            $clone->height = null;
         }
 
-        if ($this->filename !== null) {
-            $config['filename'] = $this->filename . '_' . $width . 'w';
-        }
-
-        $format = static::fromConfigArray($this->name . '_' . $width . 'w', $config);
-        $format->srcsetSkipLarger = $this->srcsetSkipLarger;
-
-        return $format;
+        return $clone;
     }
 
     public function getName(): string

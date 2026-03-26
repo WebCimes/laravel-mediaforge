@@ -36,7 +36,7 @@ Most media libraries (like Spatie Media Library) introduce a dedicated `media` t
 
 - Fluent `ImageFormat` builder — chain transforms in a readable, IDE-friendly way
 - Multi-format processing in one upload (default + thumb + WebP, all at once)
-- Responsive image variants via `->srcset()` with automatic `scaleDown` per width
+- Responsive image variants via `->srcset()` — base format + per-width variants with resize type inheritance
 - All formats of the same upload grouped in a single folder for easy management
 - ULID-based unique naming (collision-proof, chronologically sortable, URL-safe)
 - Plain PHP array output — no model binding required
@@ -133,7 +133,7 @@ $product->update(['cover' => $imageData]);
 
 ## Responsive images (srcset)
 
-`->srcset()` expands one `ImageFormat` into multiple width variants, each saved as an independent format entry. This is the recommended way to produce responsive images for use with the HTML `srcset` attribute.
+`->srcset()` expands one `ImageFormat` into a **base format entry** plus **multiple width variants**, each saved as an independent format entry. This is the recommended way to produce responsive images for use with the HTML `srcset` attribute.
 
 ```php
 $imageData = MediaForge::upload(
@@ -149,44 +149,88 @@ $imageData = MediaForge::upload(
 );
 ```
 
-This produces four format keys in the result array:
+This produces **six** format keys (base + four variants + auto-injected `default`):
 
 ```php
 [
-    'default'      => ['disk' => 'public', 'path' => 'uploads/hero_xxx/default.jpg',      'width' => 2000, 'height' => 1000, 'alt' => 'hero'],
-    'hero_1920w'   => ['disk' => 'public', 'path' => 'uploads/hero_xxx/hero_1920w.webp',  'width' => 1920, 'height' => 960,  'alt' => 'hero'],
-    'hero_1080w'   => ['disk' => 'public', 'path' => 'uploads/hero_xxx/hero_1080w.webp',  'width' => 1080, 'height' => 540,  'alt' => 'hero'],
-    'hero_720w'    => ['disk' => 'public', 'path' => 'uploads/hero_xxx/hero_720w.webp',   'width' => 720,  'height' => 360,  'alt' => 'hero'],
-    'hero_480w'    => ['disk' => 'public', 'path' => 'uploads/hero_xxx/hero_480w.webp',   'width' => 480,  'height' => 240,  'alt' => 'hero'],
+    'default'    => ['disk' => 'public', 'path' => 'uploads/hero_xxx/default.jpg',      'width' => 2000, 'height' => 1000, 'alt' => 'hero'], // original — auto-injected, kept for regeneration
+    'hero'       => ['disk' => 'public', 'path' => 'uploads/hero_xxx/hero.webp',         'width' => 2000, 'height' => 1000, 'alt' => 'hero'], // base: full size, webp+quality applied
+    'hero_1920w' => ['disk' => 'public', 'path' => 'uploads/hero_xxx/hero_1920w.webp',  'width' => 1920, 'height' => 960,  'alt' => 'hero'],
+    'hero_1080w' => ['disk' => 'public', 'path' => 'uploads/hero_xxx/hero_1080w.webp',  'width' => 1080, 'height' => 540,  'alt' => 'hero'],
+    'hero_720w'  => ['disk' => 'public', 'path' => 'uploads/hero_xxx/hero_720w.webp',   'width' => 720,  'height' => 360,  'alt' => 'hero'],
+    'hero_480w'  => ['disk' => 'public', 'path' => 'uploads/hero_xxx/hero_480w.webp',   'width' => 480,  'height' => 240,  'alt' => 'hero'],
 ]
 ```
 
-**Resize** — toujours `scaleDown` : aspect ratio préservé, jamais d'upscaling, hauteur calculée automatiquement.
+**Resize type inheritance** — each variant inherits the resize method configured on the format:
 
-**`skipLarger`** (défaut `true`) — les variantes dont la largeur cible dépasse la source sont ignorées : aucun
-fichier écrit, aucune entrée créée. Le format `default` est toujours présent et sert de fallback dans
-l’attribut `src`. Si `$srcset` est vide le navigateur utilise simplement `src`.
+| Configured on format | Variant behaviour |
+| -------------------- | ----------------- |
+| `cover(1000, 500)` | `cover(width, proportional_height)` — e.g. at 400w → `cover(400, 200)` |
+| `scaleDown(1920)` | `scaleDown(width)` — height auto-computed by Intervention |
+| *(none)* | falls back to `scaleDown(width)` — aspect ratio preserved, never upscales |
+
+The **base format** (`hero`) always uses the dimensions you configured explicitly and is never filtered by `skipLarger`.
+
+Example — square thumbnails at multiple sizes:
 
 ```php
-// Défaut — source 600px → seul hero_480w est écrit, les 3 autres sont ignorés
+ImageFormat::make('thumb')
+    ->cover(1000, 1000)
+    ->srcset([200, 400, 800])
+    ->extension('webp')
+    ->quality(75),
+// Generates: thumb (1000×1000), thumb_200w (200×200), thumb_400w (400×400), thumb_800w (800×800)
+```
+
+Example — proportional banner (keep aspect ratio, only shrink):
+
+```php
+ImageFormat::make('banner')
+    ->scaleDown(1920, 600)   // base: max 1920×600, ratio preserved
+    ->srcset([960, 480])
+    ->extension('webp'),
+// Generates: banner (≤1920×600), banner_960w (≤960×300), banner_480w (≤480×150)
+```
+
+Example — free resize without ratio preservation:
+
+```php
+ImageFormat::make('og')
+    ->resize(1200, 630)      // exact 1200×630 for Open Graph, no ratio preserved
+    ->srcset([600])
+    ->extension('jpg'),
+// Generates: og (1200×630), og_600w (600×315)
+```
+
+**`skipLarger`** (default `true`) — variants whose target width exceeds the source image width are skipped (no file written, no entry created). The base format is never filtered.
+
+```php
+// Default — source 600px wide: only hero_480w is written
 ImageFormat::make('hero')->srcset([1920, 1080, 720, 480])->extension('webp');
 
-// skipLarger: false — toutes les variantes sont créées (scaleDown les plafonne à la largeur source)
+// skipLarger: false — all variants are written (scaleDown caps them at source width)
 ImageFormat::make('hero')->srcset([1920, 1080, 720, 480], skipLarger: false)->extension('webp');
 ```
 
-**Other options (`extension()`, `quality()`, `watermark()`, `text()`, `alt()`, `customAttributes()`) are inherited by all variants.**
+**All other options (`extension()`, `quality()`, `watermark()`, `text()`, `alt()`, `customAttributes()`) are inherited by the base format and all variants.**
 
 **Building an `<img srcset="…">` attribute (in your Blade view):**
 
 ```php
-$srcset = collect($product->cover)
+$entry = $product->cover; // the stored array
+
+$srcset = collect($entry)
     ->filter(fn($v, $k) => str_ends_with($k, 'w') && isset($v['width']))
     ->map(fn($v) => Storage::disk($v['disk'])->url($v['path']) . ' ' . $v['width'] . 'w')
     ->implode(', ');
 
-// <img src="…default.jpg" srcset="…1920w.webp 1920w, …1080w.webp 1080w, …" sizes="100vw" alt="…">
-// Si $srcset est vide (source plus petite que toutes les largeurs demandées), le navigateur use src.
+// Use the base format (e.g. 'hero') as src — it has the right extension/quality applied.
+// Do NOT use 'default' in src: it is the raw original (no conversion, no quality), kept only for regeneration.
+// <img src="{{ Storage::disk($entry['hero']['disk'])->url($entry['hero']['path']) }}"
+//      srcset="{{ $srcset }}"
+//      sizes="100vw"
+//      alt="{{ $entry['hero']['alt'] }}">
 ```
 
 
@@ -294,6 +338,7 @@ $imageData = MediaForge::upload(
 // [
 //   'default'    => ['disk' => ..., 'path' => ..., 'width' => 1920, ...],  ← ready
 //   'thumb'      => ['processing' => true, 'disk' => 'public'],             ← pending
+//   'hero'       => ['processing' => true, 'disk' => 'public'],             ← pending (base)
 //   'hero_1920w' => ['processing' => true, 'disk' => 'public'],             ← pending
 //   'hero_1080w' => ['processing' => true, 'disk' => 'public'],             ← pending
 //   'hero_720w'  => ['processing' => true, 'disk' => 'public'],             ← pending
