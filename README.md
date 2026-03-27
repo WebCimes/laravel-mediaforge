@@ -18,6 +18,10 @@ Powered by [Intervention Image](https://image.intervention.io/v3), this Laravel 
 - [Delete files](#delete-files)
 - [Custom base name](#custom-base-name)
 - [Queue processing](#queue-processing)
+  - [Enabling queue processing](#enabling-queue-processing)
+  - [Listening for completion (fallback)](#listening-for-completion-fallback)
+  - [Queue configuration](#queue-configuration)
+  - [Filament + queue](#filament--queue)
 - [Filament integration](#filament-integration)
 - [Configuration](#configuration)
 
@@ -320,8 +324,11 @@ The `default` format is **always** processed synchronously so the caller always 
 
 ### Enabling queue processing
 
+Pass `queued: true` to `upload()` or `handleFiles()`. Add `model:` and `modelColumn:` to let the job update the database column automatically once processing finishes — **no event listener required**.
+
+**`upload()` — single file**
+
 ```php
-// Plain upload
 $imageData = MediaForge::upload(
     $request->file('cover'),
     'public',
@@ -332,23 +339,54 @@ $imageData = MediaForge::upload(
         ImageFormat::make('hero')->srcset([1920, 1080, 720])->extension('webp'),
     ],
     queued: true,
+    model: $product,       // Eloquent model instance
+    modelColumn: 'cover',  // attribute name that stores the media data
 );
 
-// $imageData immediately available:
-// [
-//   'default'    => ['disk' => ..., 'path' => ..., 'width' => 1920, ...],  ← ready
-//   'thumb'      => ['processing' => true, 'disk' => 'public'],             ← pending
-//   'hero'       => ['processing' => true, 'disk' => 'public'],             ← pending (base)
-//   'hero_1920w' => ['processing' => true, 'disk' => 'public'],             ← pending
-//   'hero_1080w' => ['processing' => true, 'disk' => 'public'],             ← pending
-//   'hero_720w'  => ['processing' => true, 'disk' => 'public'],             ← pending
-// ]
+// Store the partial result immediately (default = ready, others = stubs):
 $product->update(['cover' => $imageData]);
+// The job will call $product->cover = $fullEntry; $product->save(); automatically when done.
 ```
 
-### Listening for completion
+**`handleFiles()` — multi-file with queue**
 
-When the job finishes it fires `ImageFormatsProcessed`. Listen to it to update the model:
+```php
+$media = MediaForge::handleFiles(
+    diskName: 'public',
+    path: 'products',
+    uploadedFiles: $validated['images']['files'] ?? null,
+    filesToDeleteIndex: $validated['images']['deleted'] ?? null,
+    globalOrder: $validated['images']['globalOrder'] ?? null,
+    existingFiles: $product->images,
+    imageFormats: $this->imageFormats,
+    queued: true,
+    model: $product,       // Eloquent model instance
+    modelColumn: 'images', // attribute name
+);
+
+$product->update(['images' => $media]);
+// Non-default formats are processed in the background and the column is updated automatically.
+```
+
+> **`$afterCommit`** is enabled on the job — it only runs after the current database transaction commits, so the model row is guaranteed to exist when the job tries to update it. This is especially important for Filament forms, which wrap their saves in a transaction.
+
+The `default` format is always synchronous; all other formats produce a `processing: true` stub:
+
+```php
+// $imageData right after upload(..., queued: true)
+[
+    'default'    => ['disk' => ..., 'path' => ..., 'width' => 1920, ...],  // ready
+    'thumb'      => ['processing' => true, 'disk' => 'public'],             // pending
+    'hero'       => ['processing' => true, 'disk' => 'public'],             // pending (base)
+    'hero_1920w' => ['processing' => true, 'disk' => 'public'],             // pending
+    'hero_1080w' => ['processing' => true, 'disk' => 'public'],             // pending
+    'hero_720w'  => ['processing' => true, 'disk' => 'public'],             // pending
+]
+```
+
+### Listening for completion (fallback)
+
+When `model` / `modelColumn` are **not** provided — for instance when the model does not exist yet at upload time (create form) — the job fires `ImageFormatsProcessed` on completion. Use this event as a fallback:
 
 ```php
 use Webcimes\LaravelMediaforge\Events\ImageFormatsProcessed;
@@ -358,7 +396,7 @@ Event::listen(ImageFormatsProcessed::class, function (ImageFormatsProcessed $eve
     // $event->entry       → complete entry with all format keys fully resolved
 
     $product = Product::where('cover->default->path', $event->defaultPath)->first();
-    // ↑ Laravel's JSON column where-clause — works on MySQL, MariaDB, SQLite, and PostgreSQL.
+    // ↑ Laravel JSON column where-clause — works on MySQL, MariaDB, SQLite, PostgreSQL.
 
     if ($product) {
         $product->cover = $event->entry;
@@ -393,6 +431,10 @@ MediaForgeFileUpload::make('cover')
     ->imageFormats([...])
     ->queued()   // enable background processing
 ```
+
+On **edit forms** the record already exists when the upload fires — the component automatically passes `getRecord()` and the field name to the job. The model column is updated once the job completes, no listener needed.
+
+On **create forms** there is a subtlety: Filament calls `saveUploadedFileUsing` *before* creating the record (the file state is prepared first, then `model::create()` is called). This means `getRecord()` returns `null` at upload time, so the job is dispatched without a model reference and **cannot auto-update the column**. The upload itself works fine — the `default` format is processed synchronously and stored. For the non-default formats, you need the `ImageFormatsProcessed` event as a fallback (see [Listening for completion](#listening-for-completion-fallback)).
 
 ## Filament integration
 

@@ -222,6 +222,10 @@ class MediaForge
      * - ''     → ULID only, no slug prefix (e.g. '01jq8z...')
      * - 'hero' → custom prefix + ULID for uniqueness (e.g. 'hero_01jq8z...')
      *
+     * When $queued is true, the 'default' format is processed synchronously and all other formats
+     * are dispatched as a ProcessImageFormatsJob (they appear as ['processing' => true, ...] stubs).
+     * Pass $model and $modelColumn to let the job update the column automatically when done.
+     *
      * Example result:
      * ```php
      * [
@@ -231,8 +235,14 @@ class MediaForge
      * ```
      * `customAttributes` is only present when defined on the format via `->customAttributes([...])` or `->alt(...)`.
      *
-     * @param  ImageFormat|array<ImageFormat>|null  $imageFormats
-     * @param  string|null  $customBaseName  Folder/file name prefix: null = auto slug, '' = ULID only, 'name' = custom prefix
+     * @param  \Illuminate\Http\UploadedFile|null         $uploadedFile
+     * @param  string                                     $diskName        Target storage disk.
+     * @param  string                                     $path            Base directory inside the disk.
+     * @param  ImageFormat|array<ImageFormat>|null        $imageFormats    Format definitions. Pass null (or omit) for non-image files.
+     * @param  string|null                                $customBaseName  Folder/file name prefix: null = auto slug, '' = ULID only, 'name' = custom prefix.
+     * @param  bool                                       $queued          Dispatch non-default formats to a background job instead of processing synchronously.
+     * @param  \Illuminate\Database\Eloquent\Model|null   $model           Model instance to update automatically when the job completes (requires $modelColumn).
+     * @param  string|null                                $modelColumn     Attribute name on the model that stores the media entry (e.g. 'cover', 'images').
      */
     public function upload(
         \Illuminate\Http\UploadedFile|null $uploadedFile,
@@ -558,15 +568,24 @@ class MediaForge
     /**
      * Handle files: upload new files, delete removed files, and apply a global order.
      *
-     * @param  string                          $diskName          Target disk.
-     * @param  string                          $path              Base path inside the disk.
-     * @param  array<\Illuminate\Http\UploadedFile>|null  $uploadedFiles     New files to upload.
-     * @param  array<int>|null                 $filesToDeleteIndex Indexes into $existingFiles to delete.
-     * @param  array<array{type: string, index: int}>|null $globalOrder  Ordering directive (array order = final position).
-     * @param  array|null                      $existingFiles     Current DB file list (for deletion + reorder).
-     * @param  ImageFormat|array<ImageFormat>|null $imageFormats  Image processing formats.
-     * @param  string|null                     $customBaseName    Folder/file prefix: null = auto slug, '' = ULID only.
-     * @return array|null                      Updated file list, or null if empty.
+     * Designed to be called with the raw payload of a file input (new uploads, deleted indexes,
+     * ordering) in one shot. Existing files not referenced in $filesToDeleteIndex are preserved.
+     *
+     * When $queued is true, each upload dispatches non-default formats to a background job.
+     * Pass $model and $modelColumn to let each job update the list entry automatically when done.
+     *
+     * @param  string                                           $diskName           Target disk.
+     * @param  string                                           $path               Base path inside the disk.
+     * @param  array<\Illuminate\Http\UploadedFile>|null        $uploadedFiles      New files to upload.
+     * @param  array<int>|null                                  $filesToDeleteIndex Indexes into $existingFiles to delete.
+     * @param  array<array{type: string, index: int}>|null      $globalOrder        Ordering directive (array order = final position).
+     * @param  array|null                                       $existingFiles      Current DB file list (for deletion + reorder).
+     * @param  ImageFormat|array<ImageFormat>|null              $imageFormats       Image processing formats.
+     * @param  string|null                                      $customBaseName     Folder/file prefix: null = auto slug, '' = ULID only.
+     * @param  bool                                             $queued             Dispatch non-default formats to a background job.
+     * @param  \Illuminate\Database\Eloquent\Model|null         $model              Model instance to update automatically when each job completes.
+     * @param  string|null                                      $modelColumn        Attribute name on the model (e.g. 'images'). Stores a list of entries.
+     * @return array|null                                       Updated file list, or null if empty.
      */
     public function handleFiles(
         string $diskName,
