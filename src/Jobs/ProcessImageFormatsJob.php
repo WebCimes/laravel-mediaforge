@@ -47,15 +47,36 @@ class ProcessImageFormatsJob implements ShouldQueue
 
         $result = $mediaForge->regenerate($this->storedEntry, $formats);
 
-        // Auto-update the model column when class, ID and column are all provided.
+        // Auto-update the model column when class and column are provided.
         // Handles both a single-entry column (['default'=>…,'thumb'=>…])
         // and a list-of-entries column ([[…],[…]]) — as produced by handleFiles().
-        if ($this->modelClass && $this->modelId !== null && $this->modelColumn) {
-            $model = ($this->modelClass)::find($this->modelId);
+        //
+        // Supports dot-notation for nested JSON columns, e.g. 'content.hero.image':
+        //   - first segment  → the actual DB column name ('content')
+        //   - remaining path → path inside the JSON value ('hero.image')
+        //
+        // When modelId is null (Filament create forms: record didn't exist yet
+        // at dispatch time), we search by the unique defaultPath.
+        // $afterCommit = true guarantees the record is already committed to DB.
+        if ($this->modelClass && $this->modelColumn) {
+            // Split 'content.hero.image' → dbColumn='content', nestedPath='hero.image'
+            [$dbColumn, $nestedPath] = array_pad(explode('.', $this->modelColumn, 2), 2, null);
+
+            if ($this->modelId !== null) {
+                $model = ($this->modelClass)::find($this->modelId);
+            } else {
+                $defaultPath = $this->storedEntry['default']['path'];
+                // json_encode escapes '/' as '\/' — match how it is stored in the DB column
+                $jsonEncodedPath = substr(json_encode($defaultPath), 1, -1);
+                $model = ($this->modelClass)::where($dbColumn, 'like', '%' . $jsonEncodedPath . '%')->first();
+            }
 
             if ($model) {
-                $data = $model->{$this->modelColumn};
                 $defaultPath = $this->storedEntry['default']['path'];
+                $columnData  = $model->{$dbColumn};
+
+                // Navigate to the nested value if a dot-path was given
+                $data = $nestedPath ? data_get($columnData, $nestedPath) : $columnData;
 
                 if (is_array($data)) {
                     if (array_is_list($data)) {
@@ -74,7 +95,12 @@ class ProcessImageFormatsJob implements ShouldQueue
                         }
                     }
 
-                    $model->{$this->modelColumn} = $data;
+                    if ($nestedPath) {
+                        data_set($columnData, $nestedPath, $data);
+                        $model->{$dbColumn} = $columnData;
+                    } else {
+                        $model->{$dbColumn} = $data;
+                    }
                     $model->save();
                 }
             }

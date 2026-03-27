@@ -1304,4 +1304,105 @@ class MediaForgeTest extends TestCase
             \Illuminate\Support\Facades\Schema::dropIfExists('test_media_models');
         }
     }
+
+    public function test_process_image_formats_job_auto_updates_model_with_null_model_id(): void
+    {
+        Event::fake([ImageFormatsProcessed::class]);
+
+        \Illuminate\Support\Facades\Schema::create('test_media_models', function ($table) {
+            $table->id();
+            $table->json('media')->nullable();
+        });
+
+        try {
+            $file = UploadedFile::fake()->image('hero.jpg', 800, 600);
+            $storedEntry = $this->fileService->upload($file, 'public', 'uploads', [
+                ImageFormat::make('default'),
+            ]);
+
+            // Simulate Filament create form: model is created with processing stubs
+            // (job was dispatched before the model existed — modelId was null at dispatch)
+            $initialData = array_merge($storedEntry, ['thumb' => ['processing' => true, 'disk' => 'public']]);
+            $model = TestMediaModel::create(['media' => $initialData]);
+
+            $formatsConfig = [
+                'thumb' => ImageFormat::make('thumb')->cover(200, 200)->extension('webp')->toConfigArray(),
+            ];
+
+            // modelId is null: job was dispatched from a create form before the record was persisted
+            $job = new ProcessImageFormatsJob(
+                $storedEntry,
+                $formatsConfig,
+                TestMediaModel::class,
+                null,
+                'media',
+            );
+            $job->handle($this->fileService);
+
+            $model->refresh();
+
+            // Despite modelId being null at dispatch, the job must find the model via LIKE
+            // on the unique defaultPath and update the column
+            $this->assertArrayHasKey('thumb', $model->media);
+            $this->assertArrayNotHasKey('processing', $model->media['thumb']);
+            $this->assertArrayHasKey('path', $model->media['thumb']);
+            $this->disk->assertExists($model->media['thumb']['path']);
+        } finally {
+            \Illuminate\Support\Facades\Schema::dropIfExists('test_media_models');
+        }
+    }
+
+    public function test_process_image_formats_job_auto_updates_model_with_dot_notation_column(): void
+    {
+        Event::fake([ImageFormatsProcessed::class]);
+
+        \Illuminate\Support\Facades\Schema::create('test_media_models', function ($table) {
+            $table->id();
+            $table->json('media')->nullable();
+        });
+
+        try {
+            $file = UploadedFile::fake()->image('hero.jpg', 800, 600);
+            $storedEntry = $this->fileService->upload($file, 'public', 'uploads', [
+                ImageFormat::make('default'),
+            ]);
+
+            // Simulate a nested JSON structure: media.hero.image = [[...]]
+            $initialData = [
+                'hero' => [
+                    'tagline' => 'Hello',
+                    'image'   => [
+                        array_merge($storedEntry, ['thumb' => ['processing' => true, 'disk' => 'public']]),
+                    ],
+                ],
+            ];
+            $model = TestMediaModel::create(['media' => $initialData]);
+
+            $formatsConfig = [
+                'thumb' => ImageFormat::make('thumb')->cover(200, 200)->extension('webp')->toConfigArray(),
+            ];
+
+            // modelColumn uses dot-notation to target the nested list
+            $job = new ProcessImageFormatsJob(
+                $storedEntry,
+                $formatsConfig,
+                TestMediaModel::class,
+                $model->id,
+                'media.hero.image',
+            );
+            $job->handle($this->fileService);
+
+            $model->refresh();
+
+            $image = $model->media['hero']['image'][0];
+            $this->assertArrayHasKey('thumb', $image);
+            $this->assertArrayNotHasKey('processing', $image['thumb']);
+            $this->assertArrayHasKey('path', $image['thumb']);
+            $this->disk->assertExists($image['thumb']['path']);
+            // Surrounding data must be preserved
+            $this->assertSame('Hello', $model->media['hero']['tagline']);
+        } finally {
+            \Illuminate\Support\Facades\Schema::dropIfExists('test_media_models');
+        }
+    }
 }

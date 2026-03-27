@@ -19,7 +19,7 @@ Powered by [Intervention Image](https://image.intervention.io/v3), this Laravel 
 - [Custom base name](#custom-base-name)
 - [Queue processing](#queue-processing)
   - [Enabling queue processing](#enabling-queue-processing)
-  - [Listening for completion (fallback)](#listening-for-completion-fallback)
+  - [Listening for completion (advanced / fallback)](#listening-for-completion-advanced--fallback)
   - [Queue configuration](#queue-configuration)
   - [Filament + queue](#filament--queue)
 - [Filament integration](#filament-integration)
@@ -368,7 +368,9 @@ $product->update(['images' => $media]);
 // Non-default formats are processed in the background and the column is updated automatically.
 ```
 
-> **`$afterCommit`** is enabled on the job — it only runs after the current database transaction commits, so the model row is guaranteed to exist when the job tries to update it. This is especially important for Filament forms, which wrap their saves in a transaction.
+> **`$afterCommit`** is enabled on the job — it only runs after the current database transaction commits, so the model row is guaranteed to exist when the job tries to update it. If no transaction is active (Filament does not wrap operations in transactions by default), the job is dispatched immediately — which is equally safe since the record has already been saved at that point.
+
+> **Nested JSON columns** — `modelColumn` supports dot-notation to target a value nested inside a JSON column: `modelColumn: 'content.hero.image'`. The first segment is the DB column name (`content`); the rest is the path within the decoded JSON value (`hero.image`). See [Filament + queue](#filament--queue) for usage with the Filament component.
 
 The `default` format is always synchronous; all other formats produce a `processing: true` stub:
 
@@ -384,9 +386,10 @@ The `default` format is always synchronous; all other formats produce a `process
 ]
 ```
 
-### Listening for completion (fallback)
+### Listening for completion (advanced / fallback)
 
-When `model` / `modelColumn` are **not** provided — for instance when the model does not exist yet at upload time (create form) — the job fires `ImageFormatsProcessed` on completion. Use this event as a fallback:
+The job always fires `ImageFormatsProcessed` once all formats are written to disk.
+You only need to listen to this event for advanced use-cases — auto-update of the model column is handled automatically without any listener.
 
 ```php
 use Webcimes\LaravelMediaforge\Events\ImageFormatsProcessed;
@@ -394,14 +397,6 @@ use Webcimes\LaravelMediaforge\Events\ImageFormatsProcessed;
 Event::listen(ImageFormatsProcessed::class, function (ImageFormatsProcessed $event) {
     // $event->defaultPath → path of the 'default' format, used as a lookup key
     // $event->entry       → complete entry with all format keys fully resolved
-
-    $product = Product::where('cover->default->path', $event->defaultPath)->first();
-    // ↑ Laravel JSON column where-clause — works on MySQL, MariaDB, SQLite, PostgreSQL.
-
-    if ($product) {
-        $product->cover = $event->entry;
-        $product->save();
-    }
 });
 ```
 
@@ -432,9 +427,20 @@ MediaForgeFileUpload::make('cover')
     ->queued()   // enable background processing
 ```
 
+The component auto-detects the field name as the model column. For **simple top-level columns** (`cover`, `images`, …) no extra configuration is needed.
+
+For **nested JSON columns** (e.g. `$model->content['hero']['image']`), override the column path with `->modelColumn()`:
+
+```php
+MediaForgeFileUpload::make('image')   // field name inside the form
+    ->imageFormats([...])
+    ->queued()
+    ->modelColumn('content.hero.image')  // 'content' = DB column, 'hero.image' = path within JSON
+```
+
 On **edit forms** the record already exists when the upload fires — the component automatically passes `getRecord()` and the field name to the job. The model column is updated once the job completes, no listener needed.
 
-On **create forms** there is a subtlety: Filament calls `saveUploadedFileUsing` *before* creating the record (the file state is prepared first, then `model::create()` is called). This means `getRecord()` returns `null` at upload time, so the job is dispatched without a model reference and **cannot auto-update the column**. The upload itself works fine — the `default` format is processed synchronously and stored. For the non-default formats, you need the `ImageFormatsProcessed` event as a fallback (see [Listening for completion](#listening-for-completion-fallback)).
+On **create forms** Filament calls `saveUploadedFileUsing` during `form->getState()`, which runs *before* `model::create()`. `getRecord()` returns `null` at that point, but the component automatically passes the model class via `getModel()`. Because the job runs with `$afterCommit = true`, it only executes after the transaction commits and the record exists. It then locates the record by searching for the unique `defaultPath` in the column and updates it. Everything is automatic — no listener needed on create forms either.
 
 ## Filament integration
 

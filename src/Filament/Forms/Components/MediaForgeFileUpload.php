@@ -25,6 +25,13 @@ class MediaForgeFileUpload extends FileUpload
 
     protected bool $queued = false;
 
+    /**
+     * Explicit column path used for auto-update when queued.
+     * Supports dot-notation for nested JSON columns (e.g. 'content.hero.image').
+     * Defaults to the field name (getName()) when not set.
+     */
+    protected ?string $modelColumnOverride = null;
+
     protected function setUp(): void
     {
         parent::setUp();
@@ -71,7 +78,8 @@ class MediaForgeFileUpload extends FileUpload
                 null,
                 $component->isQueued(),
                 $record,
-                $record ? $component->getName() : null,
+                $component->isQueued() ? ($component->modelColumnOverride ?? $component->getName()) : null,
+                $component->isQueued() ? $component->getModel() : null,
             );
 
             return $result ? json_encode($result) : null;
@@ -151,10 +159,17 @@ class MediaForgeFileUpload extends FileUpload
      * Process non-default image formats in a background queue job.
      * The 'default' format is always processed synchronously.
      *
-     * When the record already exists (edit forms), the model column is updated automatically
-     * once the job completes — no listener required.
-     * On create forms (record not yet persisted), listen to
-     * \Webcimes\LaravelMediaforge\Events\ImageFormatsProcessed as fallback.
+     * On both edit and create forms the model column is updated automatically
+     * once the job completes — no event listener required.
+     *
+     * On edit forms the record already exists: the job receives the model ID and
+     * updates the column directly via find().
+     *
+     * On create forms getRecord() returns null (record not yet persisted at upload
+     * time), but the component passes the model class via getModel(). Because the
+     * job has $afterCommit = true, it runs after the transaction commits and the
+     * record exists. It then locates the row by searching the unique defaultPath
+     * in the column.
      */
     public function queued(bool $queued = true): static
     {
@@ -166,6 +181,29 @@ class MediaForgeFileUpload extends FileUpload
     public function isQueued(): bool
     {
         return $this->queued;
+    }
+
+    /**
+     * Override the model column path used for auto-update when queued.
+     *
+     * Use dot-notation to target a nested path inside a JSON column:
+     *
+     * ```php
+     * // Simple column:
+     * ->queued()->modelColumn('cover')
+     *
+     * // Nested JSON:  $model->content['hero']['image']
+     * ->queued()->modelColumn('content.hero.image')
+     * ```
+     *
+     * When omitted, the field name (getName()) is used as the column path,
+     * which is correct for simple top-level columns.
+     */
+    public function modelColumn(string $column): static
+    {
+        $this->modelColumnOverride = $column;
+
+        return $this;
     }
 
     /**

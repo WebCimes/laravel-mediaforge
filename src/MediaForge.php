@@ -243,6 +243,9 @@ class MediaForge
      * @param  bool                                       $queued          Dispatch non-default formats to a background job instead of processing synchronously.
      * @param  \Illuminate\Database\Eloquent\Model|null   $model           Model instance to update automatically when the job completes (requires $modelColumn).
      * @param  string|null                                $modelColumn     Attribute name on the model that stores the media entry (e.g. 'cover', 'images').
+     * @param  class-string|null                          $modelClass      Explicit model class when $model is unavailable (e.g. on Filament create forms where
+     *                                                                     getRecord() returns null). Combined with $modelColumn, the job will search by
+     *                                                                     defaultPath once the transaction commits ($afterCommit = true).
      */
     public function upload(
         \Illuminate\Http\UploadedFile|null $uploadedFile,
@@ -253,6 +256,7 @@ class MediaForge
         bool $queued = false,
         ?\Illuminate\Database\Eloquent\Model $model = null,
         ?string $modelColumn = null,
+        ?string $modelClass = null,
     ): array|null {
         $disk = $this->filesystem->disk($diskName);
 
@@ -330,7 +334,7 @@ class MediaForge
                     $dispatched = ProcessImageFormatsJob::dispatch(
                         ['default' => $result['default']],
                         $nonDefaultFormatsConfig,
-                        $model ? get_class($model) : null,
+                        $modelClass ?? ($model ? get_class($model) : null),
                         $model?->getKey(),
                         $modelColumn,
                     )->onQueue($queueName);
@@ -585,6 +589,8 @@ class MediaForge
      * @param  bool                                             $queued             Dispatch non-default formats to a background job.
      * @param  \Illuminate\Database\Eloquent\Model|null         $model              Model instance to update automatically when each job completes.
      * @param  string|null                                      $modelColumn        Attribute name on the model (e.g. 'images'). Stores a list of entries.
+     * @param  class-string|null                                $modelClass         Explicit model class when $model is unavailable (e.g. on Filament create forms where
+     *                                                                              getRecord() returns null). The job searches by defaultPath after commit.
      * @return array|null                                       Updated file list, or null if empty.
      */
     public function handleFiles(
@@ -599,6 +605,7 @@ class MediaForge
         bool $queued = false,
         ?\Illuminate\Database\Eloquent\Model $model = null,
         ?string $modelColumn = null,
+        ?string $modelClass = null,
     ): array|null {
         $files = $existingFiles ?? [];
         $uploadedFilesArray = [];
@@ -625,6 +632,7 @@ class MediaForge
                     $queued,
                     $model,
                     $modelColumn,
+                    $modelClass,
                 );
             }
         }
