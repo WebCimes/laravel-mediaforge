@@ -213,6 +213,11 @@ class ImageFormatTest extends TestCase
         $this->assertSame([1920, 720], $format->getSrcsetWidths());
     }
 
+    public function test_srcset_without_args_sets_is_srcset_to_true(): void
+    {
+        $this->assertTrue(ImageFormat::make('hero')->srcset()->isSrcset());
+    }
+
     public function test_expand_for_srcset_uses_scale_down(): void
     {
         $expanded = ImageFormat::make('hero')->srcset([1080])->expandForSrcset(1080);
@@ -303,7 +308,6 @@ class ImageFormatTest extends TestCase
         $base = ImageFormat::make('test')->srcset([200, 400])->toBaseFormat();
 
         $this->assertFalse($base->isSrcset());
-        $this->assertNull($base->getSrcsetWidths());
     }
 
     public function test_to_base_format_preserves_resize_type_and_dimensions(): void
@@ -398,7 +402,7 @@ class ImageFormatTest extends TestCase
     public function test_expanded_format_config_persists_skip_larger_false(): void
     {
         // Expanded formats have no srcsetWidths → srcsetSkipLarger is not serialized (irrelevant
-        // in queue context since regenerate() never checks it). Property default (false) is used.
+        // toBaseFormat() explicitly forces skipLarger to false (base format is never filtered). Property default (false) is used.
         $expanded = ImageFormat::make('hero')->srcset([1920], skipLarger: false)->expandForSrcset(1920);
         $config = $expanded->toConfigArray();
 

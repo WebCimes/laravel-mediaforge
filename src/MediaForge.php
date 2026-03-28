@@ -6,8 +6,6 @@ use Illuminate\Support\Str;
 use Intervention\Image\ImageManager;
 use Illuminate\Contracts\Filesystem\Factory;
 use Intervention\Image\Interfaces\ImageInterface;
-use Webcimes\LaravelMediaforge\Jobs\ProcessImageFormatsJob;
-
 class MediaForge
 {
     public function __construct(public Factory $filesystem, public ImageManager $imageManager) {}
@@ -15,7 +13,7 @@ class MediaForge
     /**
      * Normalize an ImageFormat|ImageFormat[] input into a keyed array.
      * Auto-injects a plain 'default' format at the front if none is provided.
-     * Srcset formats are expanded into individual width variants ({name}_{width}w).
+     * Srcset formats are kept as-is; their variants are processed inline in upload().
      *
      * @param  ImageFormat|array<ImageFormat>|null  $imageFormats
      * @return array<string, ImageFormat>|null  null when $imageFormats itself is null
@@ -29,16 +27,7 @@ class MediaForge
         $formats = [];
 
         foreach (is_array($imageFormats) ? $imageFormats : [$imageFormats] as $format) {
-            if ($format->isSrcset()) {
-                // Add the base format (same name/resize settings, no srcset expansion)
-                $formats[$format->getName()] = $format->toBaseFormat();
-                foreach ($format->getSrcsetWidths() as $width) {
-                    $expanded = $format->expandForSrcset($width);
-                    $formats[$expanded->getName()] = $expanded;
-                }
-            } else {
-                $formats[$format->getName()] = $format;
-            }
+            $formats[$format->getName()] = $format;
         }
 
         // Auto-inject a 'default' (no transforms = original copy) if not explicitly defined
@@ -51,7 +40,6 @@ class MediaForge
 
     /**
      * Process a single image format for an uploaded file and return the entry array.
-     * Extracted to allow reuse between the sync loop and the queued-upload path.
      */
     private function processUploadFormat(
         \Illuminate\Http\UploadedFile $uploadedFile,
@@ -222,30 +210,25 @@ class MediaForge
      * - ''     → ULID only, no slug prefix (e.g. '01jq8z...')
      * - 'hero' → custom prefix + ULID for uniqueness (e.g. 'hero_01jq8z...')
      *
-     * When $queued is true, the 'default' format is processed synchronously and all other formats
-     * are dispatched as a ProcessImageFormatsJob (they appear as ['processing' => true, ...] stubs).
-     * Pass $model and $modelColumn to let the job update the column automatically when done.
-     *
-     * Example result:
+     * Srcset formats produce a nested 'srcset' array inside the format entry:
      * ```php
      * [
-     *     'default' => ['disk' => 'public', 'path' => 'uploads/img_xxx/default.webp', 'width' => 1920, 'height' => 1080, 'alt' => 'img'],
-     *     'thumb'   => ['disk' => 'public', 'path' => 'uploads/img_xxx/thumb.webp',   'width' => 400,  'height' => 300,  'alt' => 'img', 'customAttributes' => [...]],
+     *     'default' => ['disk' => 'public', 'path' => '...default.webp', 'width' => 1920, 'height' => 1080, 'alt' => 'img'],
+     *     'hero'    => [
+     *         'disk' => 'public', 'path' => '...hero.webp', 'width' => 1920, 'height' => 1080, 'alt' => 'img',
+     *         'srcset' => [
+     *             ['disk' => 'public', 'path' => '...hero_1080w.webp', 'width' => 1080, 'height' => 607, 'alt' => 'img'],
+     *             ['disk' => 'public', 'path' => '...hero_720w.webp',  'width' => 720,  'height' => 405, 'alt' => 'img'],
+     *         ],
+     *     ],
      * ]
      * ```
-     * `customAttributes` is only present when defined on the format via `->customAttributes([...])` or `->alt(...)`.
      *
      * @param  \Illuminate\Http\UploadedFile|null         $uploadedFile
      * @param  string                                     $diskName        Target storage disk.
      * @param  string                                     $path            Base directory inside the disk.
      * @param  ImageFormat|array<ImageFormat>|null        $imageFormats    Format definitions. Pass null (or omit) for non-image files.
      * @param  string|null                                $customBaseName  Folder/file name prefix: null = auto slug, '' = ULID only, 'name' = custom prefix.
-     * @param  bool                                       $queued          Dispatch non-default formats to a background job instead of processing synchronously.
-     * @param  \Illuminate\Database\Eloquent\Model|null   $model           Model instance to update automatically when the job completes (requires $modelColumn).
-     * @param  string|null                                $modelColumn     Attribute name on the model that stores the media entry (e.g. 'cover', 'images').
-     * @param  class-string|null                          $modelClass      Explicit model class when $model is unavailable (e.g. on Filament create forms where
-     *                                                                     getRecord() returns null). Combined with $modelColumn, the job will search by
-     *                                                                     defaultPath once the transaction commits ($afterCommit = true).
      */
     public function upload(
         \Illuminate\Http\UploadedFile|null $uploadedFile,
@@ -253,10 +236,6 @@ class MediaForge
         string $path = '',
         ImageFormat|array|null $imageFormats = null,
         ?string $customBaseName = null,
-        bool $queued = false,
-        ?\Illuminate\Database\Eloquent\Model $model = null,
-        ?string $modelColumn = null,
-        ?string $modelClass = null,
     ): array|null {
         $disk = $this->filesystem->disk($diskName);
 
@@ -289,7 +268,7 @@ class MediaForge
 
             $result = [];
 
-            // Read source dimensions once if any expanded format uses skipLarger
+            // Read source dimensions once if any format uses skipLarger
             $sourceWidth = null;
             foreach ($formats as $format) {
                 if ($format->isSrcsetSkipLarger()) {
@@ -298,69 +277,57 @@ class MediaForge
                 }
             }
 
-            if ($queued) {
-                // Sync: process only 'default' so the response always has a valid entry.
-                // All other formats are dispatched to a background queue job.
-                $result['default'] = $this->processUploadFormat(
-                    $uploadedFile,
-                    $formats['default'],
-                    'default',
-                    $diskName,
-                    $baseName,
-                    $path,
-                    $originalExtension,
-                    $originalFilename,
-                );
-
-                $nonDefaultFormatsConfig = [];
-                foreach ($formats as $formatName => $format) {
-                    if ($formatName === 'default') {
-                        continue;
-                    }
-                    if ($format->isSrcsetSkipLarger() && $format->getWidth() !== null && $sourceWidth !== null && $format->getWidth() > $sourceWidth) {
-                        continue;
-                    }
-                    $result[$formatName] = [
-                        'processing' => true,
-                        'disk' => $format->getDisk() ?? $diskName,
-                    ];
-                    $nonDefaultFormatsConfig[$formatName] = $format->toConfigArray();
-                }
-
-                if (!empty($nonDefaultFormatsConfig)) {
-                    $connection = config('mediaforge.queue.connection');
-                    $queueName  = config('mediaforge.queue.name', 'default');
-
-                    $dispatched = ProcessImageFormatsJob::dispatch(
-                        ['default' => $result['default']],
-                        $nonDefaultFormatsConfig,
-                        $modelClass ?? ($model ? get_class($model) : null),
-                        $model?->getKey(),
-                        $modelColumn,
-                    )->onQueue($queueName);
-
-                    if ($connection) {
-                        $dispatched->onConnection($connection);
-                    }
-                }
-
-                return $result;
-            }
-
             foreach ($formats as $formatName => $format) {
-                if ($format->isSrcsetSkipLarger() && $format->getWidth() !== null && $sourceWidth !== null && $format->getWidth() > $sourceWidth) {
-                    continue;
+                if ($format->isSrcset()) {
+                    // Process the base format (original dimensions / base transforms)
+                    $baseFormat = $format->toBaseFormat();
+                    $entry = $this->processUploadFormat(
+                        $uploadedFile,
+                        $baseFormat,
+                        $formatName,
+                        $diskName,
+                        $baseName,
+                        $path,
+                        $originalExtension,
+                        $originalFilename,
+                    );
+
+                    // Process each srcset width variant and nest under 'srcset'
+                    $srcsetEntries = [];
+                    foreach ($format->getSrcsetWidths() as $width) {
+                        if ($format->isSrcsetSkipLarger() && $sourceWidth !== null && $width > $sourceWidth) {
+                            continue;
+                        }
+                        $variantFormat = $format->expandForSrcset($width);
+                        $srcsetEntries[] = $this->processUploadFormat(
+                            $uploadedFile,
+                            $variantFormat,
+                            $variantFormat->getName(),
+                            $diskName,
+                            $baseName,
+                            $path,
+                            $originalExtension,
+                            $originalFilename,
+                        );
+                    }
+
+                    if (!empty($srcsetEntries)) {
+                        $entry['srcset'] = $srcsetEntries;
+                    }
+
+                    $result[$formatName] = $entry;
+                } else {
+                    $result[$formatName] = $this->processUploadFormat(
+                        $uploadedFile,
+                        $format,
+                        $formatName,
+                        $diskName,
+                        $baseName,
+                        $path,
+                        $originalExtension,
+                        $originalFilename,
+                    );
                 }
-                $result[$formatName] = $this->processUploadFormat(
-                    $uploadedFile,
-                    $format,
-                    $formatName,
-                    $diskName,
-                    $baseName,
-                    $path,
-                    $originalExtension,
-                    $originalFilename,
-                );
             }
 
             return $result;
@@ -426,7 +393,15 @@ class MediaForge
                 continue;
             }
             if (!in_array($existingName, $newFormatNames, true)) {
-                $this->filesystem->disk($existingEntry['disk'])->delete($existingEntry['path']);
+                if (isset($existingEntry['disk'], $existingEntry['path'])) {
+                    $this->filesystem->disk($existingEntry['disk'])->delete($existingEntry['path']);
+                }
+                // Also delete stored srcset variants
+                foreach ($existingEntry['srcset'] ?? [] as $srcsetEntry) {
+                    if (isset($srcsetEntry['disk'], $srcsetEntry['path'])) {
+                        $this->filesystem->disk($srcsetEntry['disk'])->delete($srcsetEntry['path']);
+                    }
+                }
             } else {
                 $result[$existingName] = $existingEntry;
             }
@@ -452,8 +427,8 @@ class MediaForge
                 $this->filesystem->disk($defaultDisk)->path($defaultPath),
             );
 
-            // Delete the old file for this format if the path has changed
-            if (isset($result[$formatName]) && $result[$formatName]['path'] !== $imageFilePath) {
+            // Delete the old base file for this format if the path has changed
+            if (isset($result[$formatName]['path']) && $result[$formatName]['path'] !== $imageFilePath) {
                 $this->filesystem
                     ->disk($result[$formatName]['disk'])
                     ->delete($result[$formatName]['path']);
@@ -494,6 +469,52 @@ class MediaForge
             $customAttributes = $format->getCustomAttributes();
             if (!empty($customAttributes)) {
                 $entry['customAttributes'] = $customAttributes;
+            }
+
+            // Process srcset variants when defined
+            if ($format->isSrcset()) {
+                // Delete old srcset variant files
+                foreach ($result[$formatName]['srcset'] ?? [] as $oldSrcsetEntry) {
+                    if (isset($oldSrcsetEntry['disk'], $oldSrcsetEntry['path'])) {
+                        $this->filesystem->disk($oldSrcsetEntry['disk'])->delete($oldSrcsetEntry['path']);
+                    }
+                }
+
+                $srcsetEntries = [];
+                foreach ($format->getSrcsetWidths() as $width) {
+                    $variantFormat = $format->expandForSrcset($width);
+                    $variantDiskName = $variantFormat->getDisk() ?? $defaultDisk;
+                    $variantDisk = $this->filesystem->disk($variantDiskName);
+                    $variantExtension = $variantFormat->getExtension() ?? pathinfo($defaultPath, PATHINFO_EXTENSION);
+                    $variantDirectory = rtrim($variantFormat->getPath() ?? $baseDirectory . '/' . $baseName, '/');
+                    $variantFileName =
+                        ($variantFormat->getFilename() ?? $variantFormat->getName()) .
+                        $variantFormat->getSuffix() .
+                        '.' .
+                        $variantExtension;
+                    $variantFilePath = $variantDirectory . '/' . $variantFileName;
+
+                    $variantImage = $this->imageManager->read(
+                        $this->filesystem->disk($defaultDisk)->path($defaultPath),
+                    );
+
+                    if (!$variantDisk->exists($variantDirectory)) {
+                        $variantDisk->makeDirectory($variantDirectory);
+                    }
+
+                    $variantDimensions = $this->applyAndSaveFormat($variantImage, $variantFormat, $variantDiskName, $variantFilePath);
+                    $srcsetEntries[] = [
+                        'disk' => $variantDiskName,
+                        'path' => $variantFilePath,
+                        'width' => $variantDimensions['width'],
+                        'height' => $variantDimensions['height'],
+                        'alt' => $variantFormat->getAlt() ?? $defaultEntry['alt'] ?? '',
+                    ];
+                }
+
+                if (!empty($srcsetEntries)) {
+                    $entry['srcset'] = $srcsetEntries;
+                }
             }
 
             $result[$formatName] = $entry;
@@ -550,6 +571,17 @@ class MediaForge
                             if ($dir !== '.') {
                                 $directories[$fileDetail['disk']][$dir] = true;
                             }
+
+                            // Also delete srcset variants
+                            foreach ($fileDetail['srcset'] ?? [] as $srcsetEntry) {
+                                if (isset($srcsetEntry['disk'], $srcsetEntry['path'])) {
+                                    $this->filesystem->disk($srcsetEntry['disk'])->delete($srcsetEntry['path']);
+                                    $srcsetDir = dirname($srcsetEntry['path']);
+                                    if ($srcsetDir !== '.') {
+                                        $directories[$srcsetEntry['disk']][$srcsetDir] = true;
+                                    }
+                                }
+                            }
                         }
                     }
 
@@ -575,9 +607,6 @@ class MediaForge
      * Designed to be called with the raw payload of a file input (new uploads, deleted indexes,
      * ordering) in one shot. Existing files not referenced in $filesToDeleteIndex are preserved.
      *
-     * When $queued is true, each upload dispatches non-default formats to a background job.
-     * Pass $model and $modelColumn to let each job update the list entry automatically when done.
-     *
      * @param  string                                           $diskName           Target disk.
      * @param  string                                           $path               Base path inside the disk.
      * @param  array<\Illuminate\Http\UploadedFile>|null        $uploadedFiles      New files to upload.
@@ -586,11 +615,6 @@ class MediaForge
      * @param  array|null                                       $existingFiles      Current DB file list (for deletion + reorder).
      * @param  ImageFormat|array<ImageFormat>|null              $imageFormats       Image processing formats.
      * @param  string|null                                      $customBaseName     Folder/file prefix: null = auto slug, '' = ULID only.
-     * @param  bool                                             $queued             Dispatch non-default formats to a background job.
-     * @param  \Illuminate\Database\Eloquent\Model|null         $model              Model instance to update automatically when each job completes.
-     * @param  string|null                                      $modelColumn        Attribute name on the model (e.g. 'images'). Stores a list of entries.
-     * @param  class-string|null                                $modelClass         Explicit model class when $model is unavailable (e.g. on Filament create forms where
-     *                                                                              getRecord() returns null). The job searches by defaultPath after commit.
      * @return array|null                                       Updated file list, or null if empty.
      */
     public function handleFiles(
@@ -602,10 +626,6 @@ class MediaForge
         ?array $existingFiles = null,
         ImageFormat|array|null $imageFormats = null,
         ?string $customBaseName = null,
-        bool $queued = false,
-        ?\Illuminate\Database\Eloquent\Model $model = null,
-        ?string $modelColumn = null,
-        ?string $modelClass = null,
     ): array|null {
         $files = $existingFiles ?? [];
         $uploadedFilesArray = [];
@@ -629,10 +649,6 @@ class MediaForge
                     $path,
                     $imageFormats,
                     $customBaseName,
-                    $queued,
-                    $model,
-                    $modelColumn,
-                    $modelClass,
                 );
             }
         }

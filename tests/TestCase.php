@@ -20,13 +20,5 @@ abstract class TestCase extends OrchestraTestCase
         ]);
 
         $app['config']->set('mediaforge.driver', 'gd');
-
-        // In-memory SQLite for tests that verify the auto-update-model feature.
-        $app['config']->set('database.default', 'testbench');
-        $app['config']->set('database.connections.testbench', [
-            'driver'   => 'sqlite',
-            'database' => ':memory:',
-            'prefix'   => '',
-        ]);
     }
 }

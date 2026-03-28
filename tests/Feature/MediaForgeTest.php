@@ -3,14 +3,9 @@
 namespace Webcimes\LaravelMediaforge\Tests\Feature;
 
 use Illuminate\Http\UploadedFile;
-use Illuminate\Support\Facades\Event;
-use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Storage;
-use Webcimes\LaravelMediaforge\Events\ImageFormatsProcessed;
-use Webcimes\LaravelMediaforge\Jobs\ProcessImageFormatsJob;
 use Webcimes\LaravelMediaforge\MediaForge;
 use Webcimes\LaravelMediaforge\ImageFormat;
-use Webcimes\LaravelMediaforge\Tests\Fixtures\TestMediaModel;
 use Webcimes\LaravelMediaforge\Tests\TestCase;
 
 class MediaForgeTest extends TestCase
@@ -916,10 +911,10 @@ class MediaForgeTest extends TestCase
     }
 
     // -------------------------------------------------------------------------
-    // srcset — normalizeFormats expansion
+    // srcset — nested structure
     // -------------------------------------------------------------------------
 
-    public function test_upload_srcset_expands_into_width_variants(): void
+    public function test_upload_srcset_creates_nested_variants(): void
     {
         $file = UploadedFile::fake()->image('hero.jpg', 2000, 1000);
 
@@ -928,9 +923,9 @@ class MediaForgeTest extends TestCase
         ]);
 
         $this->assertArrayHasKey('default', $result);
-        $this->assertArrayHasKey('hero_1920w', $result);
-        $this->assertArrayHasKey('hero_1080w', $result);
-        $this->assertArrayHasKey('hero_720w', $result);
+        $this->assertArrayHasKey('hero', $result);
+        $this->assertArrayHasKey('srcset', $result['hero']);
+        $this->assertCount(3, $result['hero']['srcset']);
     }
 
     public function test_upload_srcset_variants_share_same_folder(): void
@@ -942,8 +937,8 @@ class MediaForgeTest extends TestCase
         ]);
 
         $this->assertSame(
-            dirname($result['hero_1080w']['path']),
-            dirname($result['hero_720w']['path']),
+            dirname($result['hero']['srcset'][0]['path']),
+            dirname($result['hero']['srcset'][1]['path']),
         );
     }
 
@@ -955,8 +950,8 @@ class MediaForgeTest extends TestCase
             ImageFormat::make('responsive')->srcset([1080, 480])->extension('webp'),
         ]);
 
-        $this->assertSame('responsive_1080w.webp', basename($result['responsive_1080w']['path']));
-        $this->assertSame('responsive_480w.webp', basename($result['responsive_480w']['path']));
+        $this->assertSame('responsive_1080w.webp', basename($result['responsive']['srcset'][0]['path']));
+        $this->assertSame('responsive_480w.webp', basename($result['responsive']['srcset'][1]['path']));
     }
 
     public function test_upload_srcset_variant_files_exist_on_disk(): void
@@ -967,9 +962,9 @@ class MediaForgeTest extends TestCase
             ImageFormat::make('responsive')->srcset([1080, 720, 480])->extension('webp'),
         ]);
 
-        $this->disk->assertExists($result['responsive_1080w']['path']);
-        $this->disk->assertExists($result['responsive_720w']['path']);
-        $this->disk->assertExists($result['responsive_480w']['path']);
+        $this->disk->assertExists($result['responsive']['srcset'][0]['path']);
+        $this->disk->assertExists($result['responsive']['srcset'][1]['path']);
+        $this->disk->assertExists($result['responsive']['srcset'][2]['path']);
     }
 
     public function test_upload_srcset_does_not_upscale_smaller_image(): void
@@ -981,8 +976,8 @@ class MediaForgeTest extends TestCase
             ImageFormat::make('r')->srcset([1920, 1080], skipLarger: false)->extension('webp'),
         ]);
 
-        $this->assertLessThanOrEqual(1500, $result['r_1920w']['width']);
-        $this->assertSame(1080, $result['r_1080w']['width']);
+        $this->assertLessThanOrEqual(1500, $result['r']['srcset'][0]['width']);
+        $this->assertSame(1080, $result['r']['srcset'][1]['width']);
     }
 
     public function test_upload_srcset_auto_injects_default(): void
@@ -1005,114 +1000,61 @@ class MediaForgeTest extends TestCase
             ImageFormat::make('hero')->srcset([1080])->extension('webp'),
         ]);
 
-        $this->assertArrayHasKey('width', $result['hero_1080w']);
-        $this->assertArrayHasKey('height', $result['hero_1080w']);
-        $this->assertSame(1080, $result['hero_1080w']['width']);
+        $this->assertArrayHasKey('srcset', $result['hero']);
+        $this->assertArrayHasKey('width', $result['hero']['srcset'][0]);
+        $this->assertArrayHasKey('height', $result['hero']['srcset'][0]);
+        $this->assertSame(1080, $result['hero']['srcset'][0]['width']);
     }
 
-    // -------------------------------------------------------------------------
-    // queue
-    // -------------------------------------------------------------------------
-
-    public function test_upload_queued_processes_default_synchronously(): void
+    public function test_delete_removes_srcset_variant_files(): void
     {
-        Queue::fake();
-
-        $file = UploadedFile::fake()->image('img.jpg', 800, 600);
+        $file = UploadedFile::fake()->image('img.jpg', 2000, 1000);
 
         $result = $this->fileService->upload($file, 'public', 'uploads', [
-            ImageFormat::make('default')->extension('webp'),
-            ImageFormat::make('thumb')->cover(400, 300)->extension('webp'),
-        ], null, queued: true);
-
-        // 'default' must be fully resolved and on disk
-        $this->assertArrayHasKey('path', $result['default']);
-        $this->assertArrayHasKey('width', $result['default']);
-        $this->disk->assertExists($result['default']['path']);
-    }
-
-    public function test_upload_queued_returns_processing_stub_for_non_default_formats(): void
-    {
-        Queue::fake();
-
-        $file = UploadedFile::fake()->image('img.jpg', 800, 600);
-
-        $result = $this->fileService->upload($file, 'public', 'uploads', [
-            ImageFormat::make('default'),
-            ImageFormat::make('thumb')->cover(400, 300)->extension('webp'),
-        ], null, queued: true);
-
-        $this->assertTrue($result['thumb']['processing']);
-    }
-
-    public function test_upload_queued_dispatches_process_image_formats_job(): void
-    {
-        Queue::fake();
-
-        $file = UploadedFile::fake()->image('img.jpg', 800, 600);
-
-        $this->fileService->upload($file, 'public', 'uploads', [
-            ImageFormat::make('default'),
-            ImageFormat::make('thumb')->cover(400, 300)->extension('webp'),
-        ], null, queued: true);
-
-        Queue::assertPushed(ProcessImageFormatsJob::class);
-    }
-
-    public function test_upload_queued_does_not_dispatch_job_when_only_default(): void
-    {
-        Queue::fake();
-
-        $file = UploadedFile::fake()->image('img.jpg', 800, 600);
-
-        $this->fileService->upload($file, 'public', 'uploads', [
-            ImageFormat::make('default'),
-        ], null, queued: true);
-
-        Queue::assertNothingPushed();
-    }
-
-    public function test_process_image_formats_job_generates_formats_and_fires_event(): void
-    {
-        Event::fake([ImageFormatsProcessed::class]);
-
-        $file = UploadedFile::fake()->image('hero.jpg', 800, 600);
-
-        $storedEntry = $this->fileService->upload($file, 'public', 'uploads', [
-            ImageFormat::make('default'),
+            ImageFormat::make('hero')->srcset([1080, 720])->extension('webp'),
         ]);
 
-        $formatsConfig = [
-            'thumb' => ImageFormat::make('thumb')->cover(200, 200)->extension('webp')->toConfigArray(),
-        ];
+        $path1 = $result['hero']['srcset'][0]['path'];
+        $path2 = $result['hero']['srcset'][1]['path'];
+        $this->disk->assertExists($path1);
+        $this->disk->assertExists($path2);
 
-        $job = new ProcessImageFormatsJob($storedEntry, $formatsConfig);
-        $job->handle($this->fileService);
+        $this->fileService->delete([$result]);
 
-        $this->disk->assertExists(dirname($storedEntry['default']['path']) . '/thumb.webp');
-
-        Event::assertDispatched(ImageFormatsProcessed::class, function ($event) use ($storedEntry) {
-            return $event->defaultPath === $storedEntry['default']['path']
-                && isset($event->entry['thumb']);
-        });
+        $this->disk->assertMissing($path1);
+        $this->disk->assertMissing($path2);
     }
 
-    public function test_upload_queued_with_srcset_dispatches_all_variants_as_job(): void
+    public function test_upload_srcset_without_args_uses_config_widths(): void
     {
-        Queue::fake();
+        config(['mediaforge.srcset.widths' => [720, 480]]);
 
-        $file = UploadedFile::fake()->image('img.jpg', 800, 600);
+        $file = UploadedFile::fake()->image('img.jpg', 2000, 1000);
 
         $result = $this->fileService->upload($file, 'public', 'uploads', [
-            ImageFormat::make('r')->srcset([720, 480])->extension('webp'),
-        ], null, queued: true);
+            ImageFormat::make('hero')->srcset()->extension('webp'),
+        ]);
 
-        // All srcset variants are stubs
-        $this->assertTrue($result['r_720w']['processing']);
-        $this->assertTrue($result['r_480w']['processing']);
+        $this->assertArrayHasKey('srcset', $result['hero']);
+        $this->assertCount(2, $result['hero']['srcset']);
+        $this->assertSame(720, $result['hero']['srcset'][0]['width']);
+        $this->assertSame(480, $result['hero']['srcset'][1]['width']);
+    }
 
-        // One job dispatched for both variants
-        Queue::assertPushed(ProcessImageFormatsJob::class, 1);
+    public function test_upload_srcset_with_explicit_widths_ignores_config(): void
+    {
+        config(['mediaforge.srcset.widths' => [1280, 768]]);
+
+        $file = UploadedFile::fake()->image('img.jpg', 2000, 1000);
+
+        $result = $this->fileService->upload($file, 'public', 'uploads', [
+            ImageFormat::make('hero')->srcset([1920, 1080])->extension('webp'),
+        ]);
+
+        $this->assertArrayHasKey('srcset', $result['hero']);
+        $this->assertCount(2, $result['hero']['srcset']);
+        $this->assertSame(1920, $result['hero']['srcset'][0]['width']);
+        $this->assertSame(1080, $result['hero']['srcset'][1]['width']);
     }
 
     // -------------------------------------------------------------------------
@@ -1128,11 +1070,10 @@ class MediaForgeTest extends TestCase
             ImageFormat::make('hero')->srcset([1920, 1080, 720, 480], skipLarger: true)->extension('webp'),
         ]);
 
-        $this->assertArrayNotHasKey('hero_1920w', $result);
-        $this->assertArrayNotHasKey('hero_1080w', $result);
-        $this->assertArrayNotHasKey('hero_720w', $result);
-        $this->assertArrayHasKey('hero_480w', $result);
-        $this->disk->assertExists($result['hero_480w']['path']);
+        $this->assertArrayHasKey('srcset', $result['hero']);
+        $this->assertCount(1, $result['hero']['srcset']);
+        $this->assertSame(480, $result['hero']['srcset'][0]['width']);
+        $this->disk->assertExists($result['hero']['srcset'][0]['path']);
     }
 
     public function test_upload_srcset_without_skip_larger_creates_all_variants(): void
@@ -1144,8 +1085,8 @@ class MediaForgeTest extends TestCase
         ]);
 
         // Both variants are created (scaleDown caps at source width, but entries are still there)
-        $this->assertArrayHasKey('hero_1920w', $result);
-        $this->assertArrayHasKey('hero_480w', $result);
+        $this->assertArrayHasKey('srcset', $result['hero']);
+        $this->assertCount(2, $result['hero']['srcset']);
     }
 
     public function test_upload_srcset_skip_larger_exact_source_width_is_kept(): void
@@ -1157,252 +1098,9 @@ class MediaForgeTest extends TestCase
             ImageFormat::make('r')->srcset([720, 480], skipLarger: true)->extension('webp'),
         ]);
 
-        $this->assertArrayHasKey('r_720w', $result);
-        $this->assertArrayHasKey('r_480w', $result);
-    }
-
-    public function test_upload_srcset_skip_larger_queued_omits_stubs_for_skipped_variants(): void
-    {
-        Queue::fake();
-
-        // Source 400px wide — only 300w variant should be dispatched for queued processing
-        $file = UploadedFile::fake()->image('img.jpg', 400, 300);
-
-        $result = $this->fileService->upload($file, 'public', 'uploads', [
-            ImageFormat::make('r')->srcset([1920, 300], skipLarger: true)->extension('webp'),
-        ], null, queued: true);
-
-        // 1920 should be absent — no stub and no job entry
-        $this->assertArrayNotHasKey('r_1920w', $result);
-        // 300 fits — should be a stub
-        $this->assertArrayHasKey('r_300w', $result);
-        $this->assertTrue($result['r_300w']['processing']);
-    }
-
-    // -------------------------------------------------------------------------
-    // queue — handleFiles() + auto-update model
-    // -------------------------------------------------------------------------
-
-    public function test_handle_files_queued_dispatches_job(): void
-    {
-        Queue::fake();
-
-        $file = UploadedFile::fake()->image('photo.jpg', 800, 600);
-
-        $result = $this->fileService->handleFiles(
-            diskName: 'public',
-            path: 'uploads',
-            uploadedFiles: [$file],
-            filesToDeleteIndex: null,
-            imageFormats: [
-                ImageFormat::make('default'),
-                ImageFormat::make('thumb')->cover(400, 300)->extension('webp'),
-            ],
-            queued: true,
-        );
-
-        $this->assertNotNull($result);
-        $this->assertCount(1, $result);
-        // 'default' must be resolved
-        $this->assertArrayHasKey('path', $result[0]['default']);
-        // 'thumb' must be a processing stub
-        $this->assertTrue($result[0]['thumb']['processing']);
-        Queue::assertPushed(ProcessImageFormatsJob::class);
-    }
-
-    public function test_process_image_formats_job_auto_updates_model_single_entry(): void
-    {
-        Event::fake([ImageFormatsProcessed::class]);
-
-        \Illuminate\Support\Facades\Schema::create('test_media_models', function ($table) {
-            $table->id();
-            $table->json('media')->nullable();
-        });
-
-        try {
-            $file = UploadedFile::fake()->image('hero.jpg', 800, 600);
-            $storedEntry = $this->fileService->upload($file, 'public', 'uploads', [
-                ImageFormat::make('default'),
-            ]);
-
-            // Simulate what is stored initially: complete default + processing stub for thumb
-            $initialData = array_merge($storedEntry, ['thumb' => ['processing' => true, 'disk' => 'public']]);
-            $model = TestMediaModel::create(['media' => $initialData]);
-
-            $formatsConfig = [
-                'thumb' => ImageFormat::make('thumb')->cover(200, 200)->extension('webp')->toConfigArray(),
-            ];
-
-            $job = new ProcessImageFormatsJob(
-                $storedEntry,
-                $formatsConfig,
-                TestMediaModel::class,
-                $model->id,
-                'media',
-            );
-            $job->handle($this->fileService);
-
-            $model->refresh();
-
-            // 'thumb' must now be a real processed entry
-            $this->assertArrayHasKey('thumb', $model->media);
-            $this->assertArrayNotHasKey('processing', $model->media['thumb']);
-            $this->assertArrayHasKey('path', $model->media['thumb']);
-            $this->disk->assertExists($model->media['thumb']['path']);
-        } finally {
-            \Illuminate\Support\Facades\Schema::dropIfExists('test_media_models');
-        }
-    }
-
-    public function test_process_image_formats_job_auto_updates_model_list_entry(): void
-    {
-        Event::fake([ImageFormatsProcessed::class]);
-
-        \Illuminate\Support\Facades\Schema::create('test_media_models', function ($table) {
-            $table->id();
-            $table->json('media')->nullable();
-        });
-
-        try {
-            $file = UploadedFile::fake()->image('hero.jpg', 800, 600);
-            $storedEntry = $this->fileService->upload($file, 'public', 'uploads', [
-                ImageFormat::make('default'),
-            ]);
-
-            // Column stores a list of entries (handleFiles / Filament multi-file scenario)
-            $otherEntry = ['default' => ['disk' => 'public', 'path' => 'uploads/other/default.jpg', 'width' => 100, 'height' => 100, 'alt' => 'other']];
-            $initialData = [
-                $otherEntry,
-                array_merge($storedEntry, ['thumb' => ['processing' => true, 'disk' => 'public']]),
-            ];
-            $model = TestMediaModel::create(['media' => $initialData]);
-
-            $formatsConfig = [
-                'thumb' => ImageFormat::make('thumb')->cover(200, 200)->extension('webp')->toConfigArray(),
-            ];
-
-            $job = new ProcessImageFormatsJob(
-                $storedEntry,
-                $formatsConfig,
-                TestMediaModel::class,
-                $model->id,
-                'media',
-            );
-            $job->handle($this->fileService);
-
-            $model->refresh();
-
-            // index 0 (unrelated entry) must be untouched
-            $this->assertSame('uploads/other/default.jpg', $model->media[0]['default']['path']);
-
-            // index 1 must have 'thumb' replaced with the real processed entry
-            $this->assertArrayHasKey('thumb', $model->media[1]);
-            $this->assertArrayNotHasKey('processing', $model->media[1]['thumb']);
-            $this->assertArrayHasKey('path', $model->media[1]['thumb']);
-            $this->disk->assertExists($model->media[1]['thumb']['path']);
-        } finally {
-            \Illuminate\Support\Facades\Schema::dropIfExists('test_media_models');
-        }
-    }
-
-    public function test_process_image_formats_job_auto_updates_model_with_null_model_id(): void
-    {
-        Event::fake([ImageFormatsProcessed::class]);
-
-        \Illuminate\Support\Facades\Schema::create('test_media_models', function ($table) {
-            $table->id();
-            $table->json('media')->nullable();
-        });
-
-        try {
-            $file = UploadedFile::fake()->image('hero.jpg', 800, 600);
-            $storedEntry = $this->fileService->upload($file, 'public', 'uploads', [
-                ImageFormat::make('default'),
-            ]);
-
-            // Simulate Filament create form: model is created with processing stubs
-            // (job was dispatched before the model existed — modelId was null at dispatch)
-            $initialData = array_merge($storedEntry, ['thumb' => ['processing' => true, 'disk' => 'public']]);
-            $model = TestMediaModel::create(['media' => $initialData]);
-
-            $formatsConfig = [
-                'thumb' => ImageFormat::make('thumb')->cover(200, 200)->extension('webp')->toConfigArray(),
-            ];
-
-            // modelId is null: job was dispatched from a create form before the record was persisted
-            $job = new ProcessImageFormatsJob(
-                $storedEntry,
-                $formatsConfig,
-                TestMediaModel::class,
-                null,
-                'media',
-            );
-            $job->handle($this->fileService);
-
-            $model->refresh();
-
-            // Despite modelId being null at dispatch, the job must find the model via LIKE
-            // on the unique defaultPath and update the column
-            $this->assertArrayHasKey('thumb', $model->media);
-            $this->assertArrayNotHasKey('processing', $model->media['thumb']);
-            $this->assertArrayHasKey('path', $model->media['thumb']);
-            $this->disk->assertExists($model->media['thumb']['path']);
-        } finally {
-            \Illuminate\Support\Facades\Schema::dropIfExists('test_media_models');
-        }
-    }
-
-    public function test_process_image_formats_job_auto_updates_model_with_dot_notation_column(): void
-    {
-        Event::fake([ImageFormatsProcessed::class]);
-
-        \Illuminate\Support\Facades\Schema::create('test_media_models', function ($table) {
-            $table->id();
-            $table->json('media')->nullable();
-        });
-
-        try {
-            $file = UploadedFile::fake()->image('hero.jpg', 800, 600);
-            $storedEntry = $this->fileService->upload($file, 'public', 'uploads', [
-                ImageFormat::make('default'),
-            ]);
-
-            // Simulate a nested JSON structure: media.hero.image = [[...]]
-            $initialData = [
-                'hero' => [
-                    'tagline' => 'Hello',
-                    'image'   => [
-                        array_merge($storedEntry, ['thumb' => ['processing' => true, 'disk' => 'public']]),
-                    ],
-                ],
-            ];
-            $model = TestMediaModel::create(['media' => $initialData]);
-
-            $formatsConfig = [
-                'thumb' => ImageFormat::make('thumb')->cover(200, 200)->extension('webp')->toConfigArray(),
-            ];
-
-            // modelColumn uses dot-notation to target the nested list
-            $job = new ProcessImageFormatsJob(
-                $storedEntry,
-                $formatsConfig,
-                TestMediaModel::class,
-                $model->id,
-                'media.hero.image',
-            );
-            $job->handle($this->fileService);
-
-            $model->refresh();
-
-            $image = $model->media['hero']['image'][0];
-            $this->assertArrayHasKey('thumb', $image);
-            $this->assertArrayNotHasKey('processing', $image['thumb']);
-            $this->assertArrayHasKey('path', $image['thumb']);
-            $this->disk->assertExists($image['thumb']['path']);
-            // Surrounding data must be preserved
-            $this->assertSame('Hello', $model->media['hero']['tagline']);
-        } finally {
-            \Illuminate\Support\Facades\Schema::dropIfExists('test_media_models');
-        }
+        $this->assertArrayHasKey('srcset', $result['r']);
+        $this->assertCount(2, $result['r']['srcset']);
+        $this->assertSame(720, $result['r']['srcset'][0]['width']);
+        $this->assertSame(480, $result['r']['srcset'][1]['width']);
     }
 }

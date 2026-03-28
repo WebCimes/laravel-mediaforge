@@ -14,23 +14,14 @@ use Webcimes\LaravelMediaforge\MediaForge;
  *
  * Each upload produces a JSON-encoded format map stored in the DB:
  * [
- *   'default' => ['disk' => 'public', 'path' => 'uploads/default/img_xxx.webp', 'width' => 1920, ...],
- *   'thumb'   => ['disk' => 'public', 'path' => 'uploads/thumb/img_xxx.jpg',    'width' => 400,  ...],
+ *   'default' => ['disk' => 'public', 'path' => 'uploads/img_xxx/default.webp', 'width' => 1920, ...],
+ *   'thumb'   => ['disk' => 'public', 'path' => 'uploads/img_xxx/thumb.webp',   'width' => 400,  ...],
  * ]
  */
 class MediaForgeFileUpload extends FileUpload
 {
     /** @var array<ImageFormat>|null */
     protected ?array $imageFormats = null;
-
-    protected bool $queued = false;
-
-    /**
-     * Explicit column path used for auto-update when queued.
-     * Supports dot-notation for nested JSON columns (e.g. 'content.hero.image').
-     * Defaults to the field name (getName()) when not set.
-     */
-    protected ?string $modelColumnOverride = null;
 
     protected function setUp(): void
     {
@@ -68,18 +59,11 @@ class MediaForgeFileUpload extends FileUpload
             MediaForgeFileUpload $component,
             TemporaryUploadedFile $file,
         ): ?string {
-            $record = $component->getRecord();
-
             $result = app(MediaForge::class)->upload(
                 $file,
                 $component->getDiskName(),
                 $component->getDirectory() ?? '',
                 $component->getImageFormats(),
-                null,
-                $component->isQueued(),
-                $record,
-                $component->isQueued() ? ($component->modelColumnOverride ?? $component->getName()) : null,
-                $component->isQueued() ? $component->getModel() : null,
             );
 
             return $result ? json_encode($result) : null;
@@ -151,57 +135,6 @@ class MediaForgeFileUpload extends FileUpload
     public function imageFormats(array|Closure $formats): static
     {
         $this->imageFormats = $formats instanceof Closure ? $formats() : $formats;
-
-        return $this;
-    }
-
-    /**
-     * Process non-default image formats in a background queue job.
-     * The 'default' format is always processed synchronously.
-     *
-     * On both edit and create forms the model column is updated automatically
-     * once the job completes — no event listener required.
-     *
-     * On edit forms the record already exists: the job receives the model ID and
-     * updates the column directly via find().
-     *
-     * On create forms getRecord() returns null (record not yet persisted at upload
-     * time), but the component passes the model class via getModel(). Because the
-     * job has $afterCommit = true, it runs after the transaction commits and the
-     * record exists. It then locates the row by searching the unique defaultPath
-     * in the column.
-     */
-    public function queued(bool $queued = true): static
-    {
-        $this->queued = $queued;
-
-        return $this;
-    }
-
-    public function isQueued(): bool
-    {
-        return $this->queued;
-    }
-
-    /**
-     * Override the model column path used for auto-update when queued.
-     *
-     * Use dot-notation to target a nested path inside a JSON column:
-     *
-     * ```php
-     * // Simple column:
-     * ->queued()->modelColumn('cover')
-     *
-     * // Nested JSON:  $model->content['hero']['image']
-     * ->queued()->modelColumn('content.hero.image')
-     * ```
-     *
-     * When omitted, the field name (getName()) is used as the column path,
-     * which is correct for simple top-level columns.
-     */
-    public function modelColumn(string $column): static
-    {
-        $this->modelColumnOverride = $column;
 
         return $this;
     }

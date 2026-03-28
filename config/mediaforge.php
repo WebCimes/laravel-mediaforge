@@ -56,22 +56,13 @@ return [
 
     /*
     |--------------------------------------------------------------------------
-    | Queue Configuration
+    | Srcset Defaults
     |--------------------------------------------------------------------------
-    | When upload(..., queued: true) is used (or the Filament component's
-    | ->queued() option), non-default image formats are processed in a
-    | background queue job. The 'default' format is always synchronous.
-    |
-    | Listen to \Webcimes\LaravelMediaforge\Events\ImageFormatsProcessed to
-    | update your model once the job completes:
-    |
-    |   Event::listen(ImageFormatsProcessed::class, function ($event) {
-    |       // $event->defaultPath  → path of the 'default' format (lookup key)
-    |       // $event->entry        → complete entry with all format keys
-    |   });
+    | Default widths used when calling ->srcset() without any arguments.
+    | These are the most common CSS breakpoints; adjust to match your design
+    | system. Passing explicit widths to ->srcset([...]) always takes precedence.
     */
-    'queue' => [
-        'connection' => env('MEDIAFORGE_QUEUE_CONNECTION', null),  // null = default connection
-        'name'       => env('MEDIAFORGE_QUEUE_NAME', 'default'),
+    'srcset' => [
+        'widths' => [1920, 1440, 1280, 1024, 768, 480],
     ],
 ];

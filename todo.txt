@@ -1,5 +1,0 @@
-srcset mode auto ? 
-srcset avec poucentage ? 
-srcset dans config ?
-queue : bug filament en création (pas de json remplis pour les format autre que default)
-queue : bug suppression, seulement "default.webp" est supprimé

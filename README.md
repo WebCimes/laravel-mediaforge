@@ -17,11 +17,6 @@ Powered by [Intervention Image](https://image.intervention.io/v3), this Laravel 
 - [Regenerate a format](#regenerate-a-format)
 - [Delete files](#delete-files)
 - [Custom base name](#custom-base-name)
-- [Queue processing](#queue-processing)
-  - [Enabling queue processing](#enabling-queue-processing)
-  - [Listening for completion (advanced / fallback)](#listening-for-completion-advanced--fallback)
-  - [Queue configuration](#queue-configuration)
-  - [Filament + queue](#filament--queue)
 - [Filament integration](#filament-integration)
 - [Configuration](#configuration)
 
@@ -45,7 +40,6 @@ Most media libraries (like Spatie Media Library) introduce a dedicated `media` t
 - ULID-based unique naming (collision-proof, chronologically sortable, URL-safe)
 - Plain PHP array output — no model binding required
 - Regenerate derivative formats from the stored original at any time
-- Queue support — heavy format processing dispatched as a background job (opt-in)
 - Works with any Laravel filesystem disk (local, S3, SFTP, …)
 
 ## Requirements
@@ -130,14 +124,17 @@ $product->update(['cover' => $imageData]);
 | `->coverDown(w, h)`                    | Same — only shrinks                                   |
 | `->text('Draft', [...])`               | Text overlay (requires a TTF font — see config)       |
 | `->watermark('/path/logo.png', [...])` | Image watermark overlay                               |
-| `->srcset([1920, 1080, 720])`          | Responsive image variants — see [Responsive images](#responsive-images-srcset) |
+| `->srcset()`                           | Responsive image variants using config default widths — see [Responsive images](#responsive-images-srcset) |
+| `->srcset([1920, 1080, 720])`          | Responsive image variants with explicit widths — see [Responsive images](#responsive-images-srcset) |
 | `->alt('My image')`                    | Override the alt text for this format (defaults to filename stem) |
 | `->customAttributes([...])`            | Custom metadata stored alongside this format entry    |
 <!-- prettier-ignore-end -->
 
 ## Responsive images (srcset)
 
-`->srcset()` expands one `ImageFormat` into a **base format entry** plus **multiple width variants**, each saved as an independent format entry. This is the recommended way to produce responsive images for use with the HTML `srcset` attribute.
+`->srcset()` generates a **base format entry** plus **width variant entries**, all nested under the format key via a `srcset` array. This is the recommended way to produce responsive images for use with the HTML `srcset` attribute.
+
+Call `->srcset()` **without arguments** to use the widths defined in `config('mediaforge.srcset.widths')` (default: `[1920, 1440, 1280, 1024, 768, 480]`). Pass an explicit array to override the config for that format.
 
 ```php
 $imageData = MediaForge::upload(
@@ -153,16 +150,20 @@ $imageData = MediaForge::upload(
 );
 ```
 
-This produces **six** format keys (base + four variants + auto-injected `default`):
+This produces the following structure (base format + nested `srcset` array + auto-injected `default`):
 
 ```php
 [
-    'default'    => ['disk' => 'public', 'path' => 'uploads/hero_xxx/default.jpg',      'width' => 2000, 'height' => 1000, 'alt' => 'hero'], // original — auto-injected, kept for regeneration
-    'hero'       => ['disk' => 'public', 'path' => 'uploads/hero_xxx/hero.webp',         'width' => 2000, 'height' => 1000, 'alt' => 'hero'], // base: full size, webp+quality applied
-    'hero_1920w' => ['disk' => 'public', 'path' => 'uploads/hero_xxx/hero_1920w.webp',  'width' => 1920, 'height' => 960,  'alt' => 'hero'],
-    'hero_1080w' => ['disk' => 'public', 'path' => 'uploads/hero_xxx/hero_1080w.webp',  'width' => 1080, 'height' => 540,  'alt' => 'hero'],
-    'hero_720w'  => ['disk' => 'public', 'path' => 'uploads/hero_xxx/hero_720w.webp',   'width' => 720,  'height' => 360,  'alt' => 'hero'],
-    'hero_480w'  => ['disk' => 'public', 'path' => 'uploads/hero_xxx/hero_480w.webp',   'width' => 480,  'height' => 240,  'alt' => 'hero'],
+    'default' => ['disk' => 'public', 'path' => 'uploads/hero_xxx/default.jpg', 'width' => 2000, 'height' => 1000, 'alt' => 'hero'],
+    'hero' => [
+        'disk' => 'public', 'path' => 'uploads/hero_xxx/hero.webp', 'width' => 2000, 'height' => 1000, 'alt' => 'hero',
+        'srcset' => [
+            ['disk' => 'public', 'path' => 'uploads/hero_xxx/hero_1920w.webp', 'width' => 1920, 'height' => 960, 'alt' => 'hero'],
+            ['disk' => 'public', 'path' => 'uploads/hero_xxx/hero_1080w.webp', 'width' => 1080, 'height' => 540, 'alt' => 'hero'],
+            ['disk' => 'public', 'path' => 'uploads/hero_xxx/hero_720w.webp',  'width' => 720,  'height' => 360, 'alt' => 'hero'],
+            ['disk' => 'public', 'path' => 'uploads/hero_xxx/hero_480w.webp',  'width' => 480,  'height' => 240, 'alt' => 'hero'],
+        ],
+    ],
 ]
 ```
 
@@ -184,7 +185,7 @@ ImageFormat::make('thumb')
     ->srcset([200, 400, 800])
     ->extension('webp')
     ->quality(75),
-// Generates: thumb (1000×1000), thumb_200w (200×200), thumb_400w (400×400), thumb_800w (800×800)
+// Generates: thumb (1000×1000) with srcset: [200×200, 400×400, 800×800]
 ```
 
 Example — proportional banner (keep aspect ratio, only shrink):
@@ -194,7 +195,7 @@ ImageFormat::make('banner')
     ->scaleDown(1920, 600)   // base: max 1920×600, ratio preserved
     ->srcset([960, 480])
     ->extension('webp'),
-// Generates: banner (≤1920×600), banner_960w (≤960×300), banner_480w (≤480×150)
+// Generates: banner (≤1920×600) with srcset: [≤960×300, ≤480×150]
 ```
 
 Example — free resize without ratio preservation:
@@ -204,16 +205,16 @@ ImageFormat::make('og')
     ->resize(1200, 630)      // exact 1200×630 for Open Graph, no ratio preserved
     ->srcset([600])
     ->extension('jpg'),
-// Generates: og (1200×630), og_600w (600×315)
+// Generates: og (1200×630) with srcset: [600×315]
 ```
 
 **`skipLarger`** (default `true`) — variants whose target width exceeds the source image width are skipped (no file written, no entry created). The base format is never filtered.
 
 ```php
-// Default — source 600px wide: only hero_480w is written
+// Default — source 600px wide: srcset contains only hero_480w
 ImageFormat::make('hero')->srcset([1920, 1080, 720, 480])->extension('webp');
 
-// skipLarger: false — all variants are written (scaleDown caps them at source width)
+// skipLarger: false — all four variants are written (scaleDown caps them at source width)
 ImageFormat::make('hero')->srcset([1920, 1080, 720, 480], skipLarger: false)->extension('webp');
 ```
 
@@ -224,17 +225,21 @@ ImageFormat::make('hero')->srcset([1920, 1080, 720, 480], skipLarger: false)->ex
 ```php
 $entry = $product->cover; // the stored array
 
-$srcset = collect($entry)
-    ->filter(fn($v, $k) => str_ends_with($k, 'w') && isset($v['width']))
+// Build the srcset string from the nested array
+$srcset = collect($entry['hero']['srcset'])
     ->map(fn($v) => Storage::disk($v['disk'])->url($v['path']) . ' ' . $v['width'] . 'w')
     ->implode(', ');
 
 // Use the base format (e.g. 'hero') as src — it has the right extension/quality applied.
 // Do NOT use 'default' in src: it is the raw original (no conversion, no quality), kept only for regeneration.
-// <img src="{{ Storage::disk($entry['hero']['disk'])->url($entry['hero']['path']) }}"
-//      srcset="{{ $srcset }}"
-//      sizes="100vw"
-//      alt="{{ $entry['hero']['alt'] }}">
+```
+
+```html
+<img
+    src="{{ Storage::disk($entry['hero']['disk'])->url($entry['hero']['path']) }}"
+    srcset="{{ $srcset }}"
+    sizes="100vw"
+    alt="{{ $entry['hero']['alt'] }}">
 ```
 
 
@@ -316,137 +321,11 @@ MediaForge::upload($file, 'public', 'uploads', $formats, '');
 MediaForge::upload($file, 'public', 'uploads', $formats, 'product-hero');
 ```
 
-## Queue processing
-
-By default all formats are processed synchronously during the upload request. For large images or many format variants, you can dispatch the processing of non-`default` formats to a background queue job — keeping the HTTP response fast.
-
-The `default` format is **always** processed synchronously so the caller always receives a valid file immediately. All other formats are dispatched as a `ProcessImageFormatsJob` and produce a `processing: true` stub in the meantime.
-
-### Enabling queue processing
-
-Pass `queued: true` to `upload()` or `handleFiles()`. Add `model:` and `modelColumn:` to let the job update the database column automatically once processing finishes — **no event listener required**.
-
-**`upload()` — single file**
-
-```php
-$imageData = MediaForge::upload(
-    $request->file('cover'),
-    'public',
-    'uploads',
-    [
-        ImageFormat::make('default')->scaleDown(1920, 1080)->extension('webp'),
-        ImageFormat::make('thumb')->cover(400, 300)->extension('webp'),
-        ImageFormat::make('hero')->srcset([1920, 1080, 720])->extension('webp'),
-    ],
-    queued: true,
-    model: $product,       // Eloquent model instance
-    modelColumn: 'cover',  // attribute name that stores the media data
-);
-
-// Store the partial result immediately (default = ready, others = stubs):
-$product->update(['cover' => $imageData]);
-// The job will call $product->cover = $fullEntry; $product->save(); automatically when done.
-```
-
-**`handleFiles()` — multi-file with queue**
-
-```php
-$media = MediaForge::handleFiles(
-    diskName: 'public',
-    path: 'products',
-    uploadedFiles: $validated['images']['files'] ?? null,
-    filesToDeleteIndex: $validated['images']['deleted'] ?? null,
-    globalOrder: $validated['images']['globalOrder'] ?? null,
-    existingFiles: $product->images,
-    imageFormats: $this->imageFormats,
-    queued: true,
-    model: $product,       // Eloquent model instance
-    modelColumn: 'images', // attribute name
-);
-
-$product->update(['images' => $media]);
-// Non-default formats are processed in the background and the column is updated automatically.
-```
-
-> **`$afterCommit`** is enabled on the job — it only runs after the current database transaction commits, so the model row is guaranteed to exist when the job tries to update it. If no transaction is active (Filament does not wrap operations in transactions by default), the job is dispatched immediately — which is equally safe since the record has already been saved at that point.
-
-> **Nested JSON columns** — `modelColumn` supports dot-notation to target a value nested inside a JSON column: `modelColumn: 'content.hero.image'`. The first segment is the DB column name (`content`); the rest is the path within the decoded JSON value (`hero.image`). See [Filament + queue](#filament--queue) for usage with the Filament component.
-
-The `default` format is always synchronous; all other formats produce a `processing: true` stub:
-
-```php
-// $imageData right after upload(..., queued: true)
-[
-    'default'    => ['disk' => ..., 'path' => ..., 'width' => 1920, ...],  // ready
-    'thumb'      => ['processing' => true, 'disk' => 'public'],             // pending
-    'hero'       => ['processing' => true, 'disk' => 'public'],             // pending (base)
-    'hero_1920w' => ['processing' => true, 'disk' => 'public'],             // pending
-    'hero_1080w' => ['processing' => true, 'disk' => 'public'],             // pending
-    'hero_720w'  => ['processing' => true, 'disk' => 'public'],             // pending
-]
-```
-
-### Listening for completion (advanced / fallback)
-
-The job always fires `ImageFormatsProcessed` once all formats are written to disk.
-You only need to listen to this event for advanced use-cases — auto-update of the model column is handled automatically without any listener.
-
-```php
-use Webcimes\LaravelMediaforge\Events\ImageFormatsProcessed;
-
-Event::listen(ImageFormatsProcessed::class, function (ImageFormatsProcessed $event) {
-    // $event->defaultPath → path of the 'default' format, used as a lookup key
-    // $event->entry       → complete entry with all format keys fully resolved
-});
-```
-
-### Queue configuration
-
-In `.env`:
-
-```dotenv
-MEDIAFORGE_QUEUE_CONNECTION=redis   # null = use the app's default QUEUE_CONNECTION
-MEDIAFORGE_QUEUE_NAME=mediaforge    # Isolate MediaForge jobs on their own queue (defaults to 'default' if left empty)
-```
-
-Start a dedicated worker for MediaForge jobs:
-
-```bash
-php artisan queue:work --queue=mediaforge
-```
-
-If `MEDIAFORGE_QUEUE_NAME` is left as `default`, jobs run on the shared default queue — fine for simple setups, but a dedicated queue is recommended for production to prevent heavy image processing from blocking other jobs.
-
-### Filament + queue
-
-The Filament `MediaForgeFileUpload` component has a `->queued()` option:
-
-```php
-MediaForgeFileUpload::make('cover')
-    ->imageFormats([...])
-    ->queued()   // enable background processing
-```
-
-The component auto-detects the field name as the model column. For **simple top-level columns** (`cover`, `images`, …) no extra configuration is needed.
-
-For **nested JSON columns** (e.g. `$model->content['hero']['image']`), override the column path with `->modelColumn()`:
-
-```php
-MediaForgeFileUpload::make('image')   // field name inside the form
-    ->imageFormats([...])
-    ->queued()
-    ->modelColumn('content.hero.image')  // 'content' = DB column, 'hero.image' = path within JSON
-```
-
-On **edit forms** the record already exists when the upload fires — the component automatically passes `getRecord()` and the field name to the job. The model column is updated once the job completes, no listener needed.
-
-On **create forms** Filament calls `saveUploadedFileUsing` during `form->getState()`, which runs *before* `model::create()`. `getRecord()` returns `null` at that point, but the component automatically passes the model class via `getModel()`. Because the job runs with `$afterCommit = true`, it only executes after the transaction commits and the record exists. It then locates the record by searching for the unique `defaultPath` in the column and updates it. Everything is automatic — no listener needed on create forms either.
-
 ## Filament integration
 
 `MediaForgeFileUpload` is a drop-in replacement for Filament's `FileUpload` component. It transparently delegates storage to `MediaForge` and encodes the resulting format map as JSON in the database column.
 
-All native `FileUpload` methods (`->multiple()`, `->reorderable()`, `->disk()`, `->directory()`, `->panelLayout()`, etc.) work exactly as in standard Filament. The MediaForge-specific additions are `->imageFormats()` and `->queued()`:
+All native `FileUpload` methods (`->multiple()`, `->reorderable()`, `->disk()`, `->directory()`, `->panelLayout()`, etc.) work exactly as in standard Filament. The MediaForge-specific addition is `->imageFormats()`:
 
 ```php
 use Webcimes\LaravelMediaforge\Filament\Forms\Components\MediaForgeFileUpload;
@@ -464,7 +343,6 @@ MediaForgeFileUpload::make('cover')
             ->quality(60)
             ->extension('webp'),
     ])
-    ->queued()   // optional — dispatch non-default formats to a background job
     ->acceptedFileTypes(['image/jpeg', 'image/png', 'image/webp'])
     ->multiple()
     ->reorderable()
@@ -531,13 +409,11 @@ return [
         'opacity' => 75,
     ],
 
-    // Queue configuration for background format processing (upload(..., queued: true)).
-    // The 'default' format is always synchronous; all other formats are dispatched as a job.
-    // Set MEDIAFORGE_QUEUE_NAME to a dedicated queue (e.g. 'mediaforge') to isolate processing
-    // from your other jobs. Leave MEDIAFORGE_QUEUE_CONNECTION as null to use the app default.
-    'queue' => [
-        'connection' => null,      // null = app default (QUEUE_CONNECTION). Other values: 'redis', 'database', 'sqs', 'sync'
-        'name'       => 'default', // queue name — use a dedicated name like 'mediaforge' in production
+    // Srcset defaults. Used when calling ->srcset() with no explicit widths.
+    // These are the most common CSS breakpoints; adjust to match your design system.
+    // Passing an explicit array to ->srcset([...]) always overrides this config.
+    'srcset' => [
+        'widths' => [1920, 1440, 1280, 1024, 768, 480],
     ],
 ];
 ```

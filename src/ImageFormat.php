@@ -34,6 +34,8 @@ class ImageFormat
 
     private ?string $alt = null;
 
+    private bool $srcsetEnabled = false;
+
     private ?array $srcsetWidths = null;
 
     private bool $srcsetSkipLarger = false;
@@ -339,13 +341,17 @@ class ImageFormat
      *      alt="...">
      * ```
      *
-     * @param int[]  $widths      List of target widths in pixels.
-     * @param bool   $skipLarger  Skip variants whose target width exceeds the source image width.
-     *                            Defaults to `true`. Set to `false` to always write all variants.
+     * @param int[]|null $widths      List of target widths in pixels. When `null` (or omitted),
+     *                                 the widths defined in `config('mediaforge.srcset.widths')` are used.
+     * @param bool       $skipLarger  Skip variants whose target width exceeds the source image width.
+     *                                Defaults to `true`. Set to `false` to always write all variants.
      */
-    public function srcset(array $widths, bool $skipLarger = true): static
+    public function srcset(?array $widths = null, bool $skipLarger = true): static
     {
-        $this->srcsetWidths = array_values(array_filter($widths, fn($w) => is_int($w) && $w > 0));
+        $this->srcsetEnabled = true;
+        $this->srcsetWidths = $widths !== null
+            ? array_values(array_filter($widths, fn($w) => is_int($w) && $w > 0))
+            : null;
         $this->srcsetSkipLarger = $skipLarger;
 
         return $this;
@@ -353,12 +359,12 @@ class ImageFormat
 
     public function isSrcset(): bool
     {
-        return $this->srcsetWidths !== null;
+        return $this->srcsetEnabled;
     }
 
-    public function getSrcsetWidths(): ?array
+    public function getSrcsetWidths(): array
     {
-        return $this->srcsetWidths;
+        return $this->srcsetWidths ?? config('mediaforge.srcset.widths', [1920, 1440, 1280, 1024, 768, 480]);
     }
 
     public function isSrcsetSkipLarger(): bool
@@ -374,6 +380,7 @@ class ImageFormat
     public function toBaseFormat(): static
     {
         $clone = clone $this;
+        $clone->srcsetEnabled = false;
         $clone->srcsetWidths = null;
         $clone->srcsetSkipLarger = false; // base format is never subject to skipLarger filtering
 
@@ -389,6 +396,7 @@ class ImageFormat
     {
         $clone = clone $this;
         $clone->name = $this->name . '_' . $width . 'w';
+        $clone->srcsetEnabled = false;
         $clone->srcsetWidths = null;
 
         if ($this->filename !== null) {
@@ -548,8 +556,12 @@ class ImageFormat
         if ($this->alt !== null) {
             $config['alt'] = $this->alt;
         }
-        if ($this->srcsetWidths !== null) {
-            $config['srcsetWidths'] = $this->srcsetWidths;
+        if ($this->srcsetEnabled) {
+            if ($this->srcsetWidths !== null) {
+                $config['srcsetWidths'] = $this->srcsetWidths;
+            } else {
+                $config['srcsetUseConfig'] = true;
+            }
             if (!$this->srcsetSkipLarger) {
                 $config['srcsetSkipLarger'] = false; // save only when non-default (false)
             }
@@ -603,11 +615,15 @@ class ImageFormat
             $format->alt = $config['alt'];
         }
         if (isset($config['srcsetWidths'])) {
+            $format->srcsetEnabled = true;
             $format->srcsetWidths = $config['srcsetWidths'];
-            // API default for srcset parent formats is true; only saved when false
+            $format->srcsetSkipLarger = $config['srcsetSkipLarger'] ?? true;
+        } elseif (isset($config['srcsetUseConfig']) && $config['srcsetUseConfig']) {
+            $format->srcsetEnabled = true;
+            // srcsetWidths stays null → getSrcsetWidths() resolves from config at runtime
             $format->srcsetSkipLarger = $config['srcsetSkipLarger'] ?? true;
         } elseif (isset($config['srcsetSkipLarger'])) {
-            // Expanded formats (no srcsetWidths) may have it saved when false
+            // Expanded variants (no srcset parent) with non-default skipLarger
             $format->srcsetSkipLarger = $config['srcsetSkipLarger'];
         }
 
