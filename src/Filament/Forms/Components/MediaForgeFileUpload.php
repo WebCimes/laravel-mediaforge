@@ -23,6 +23,24 @@ class MediaForgeFileUpload extends FileUpload
     /** @var array<ImageFormat>|null */
     protected ?array $imageFormats = null;
 
+    /**
+     * JSON strings of the files present in DB when the form was hydrated.
+     * Used to defer deletion until the form is actually saved.
+     *
+     * @var string[]
+     */
+    protected array $originalFiles = [];
+
+    public function setOriginalFiles(array $files): void
+    {
+        $this->originalFiles = $files;
+    }
+
+    public function getOriginalFiles(): array
+    {
+        return $this->originalFiles;
+    }
+
     protected function setUp(): void
     {
         parent::setUp();
@@ -31,6 +49,7 @@ class MediaForgeFileUpload extends FileUpload
         $this->fetchFileInformation(false);
 
         // DB → internal: decode each stored array to a JSON string.
+        // Also snapshot the original files so deletion can be deferred to save time.
         $this->afterStateHydrated(static function (
             MediaForgeFileUpload $component,
             mixed $state,
@@ -51,7 +70,12 @@ class MediaForgeFileUpload extends FileUpload
                 }
             }
 
-            $component->rawState(array_values(array_filter($normalized)));
+            $normalized = array_values(array_filter($normalized));
+
+            // Store snapshot so dehydrateStateUsing can detect removals.
+            $component->setOriginalFiles($normalized);
+
+            $component->rawState($normalized);
         });
 
         // Upload: delegate to MediaForge, return JSON-encoded result.
@@ -94,36 +118,45 @@ class MediaForgeFileUpload extends FileUpload
             ];
         });
 
-        // Delete: decode JSON and delete all format files via MediaForge.
-        $this->deleteUploadedFileUsing(static function (string $file): void {
-            $metadata = json_decode($file, true);
-
-            if (!$metadata) {
-                return;
-            }
-
-            app(MediaForge::class)->delete([$metadata]);
-        });
+        // Deletion is intentionally deferred — actual file removal happens in dehydrateStateUsing
+        // only when the form is saved, so clicking the X button without saving leaves files intact.
+        $this->deleteUploadedFileUsing(static function (): void {});
 
         // Internal → DB: decode JSON strings back to arrays.
-        $this->dehydrateStateUsing(static function (mixed $state): ?array {
+        // This is also where deferred deletions are performed:
+        // any file present in the original hydrated state but absent from the current
+        // state is deleted here — i.e. only when the form is actually saved.
+        $this->dehydrateStateUsing(static function (MediaForgeFileUpload $component, mixed $state): ?array {
+            $items = blank($state) ? [] : (is_array($state) ? array_values($state) : [$state]);
+
+            // Normalise current state items to JSON strings for comparison.
+            $remaining = array_values(array_filter(array_map(
+                static fn (mixed $item): ?string => is_string($item)
+                    ? $item
+                    : (is_array($item) ? json_encode($item) : null),
+                $items,
+            )));
+
+            // Delete files that existed before but are no longer in the current state.
+            foreach ($component->getOriginalFiles() as $originalFile) {
+                if (!in_array($originalFile, $remaining, true)) {
+                    $metadata = json_decode($originalFile, true);
+                    if ($metadata) {
+                        app(MediaForge::class)->delete([$metadata]);
+                    }
+                }
+            }
+
             if (blank($state)) {
                 return null;
             }
 
-            $items = is_array($state) ? array_values($state) : [$state];
-
-            $decoded = array_values(
-                array_filter(
-                    array_map(static function (mixed $item): mixed {
-                        if (is_string($item)) {
-                            return json_decode($item, true);
-                        }
-
-                        return is_array($item) ? $item : null;
-                    }, $items),
-                ),
-            );
+            $decoded = array_values(array_filter(array_map(
+                static fn (mixed $item): mixed => is_string($item)
+                    ? json_decode($item, true)
+                    : (is_array($item) ? $item : null),
+                $items,
+            )));
 
             return !empty($decoded) ? $decoded : null;
         });
