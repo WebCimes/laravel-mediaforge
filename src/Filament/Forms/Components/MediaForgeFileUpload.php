@@ -23,24 +23,6 @@ class MediaForgeFileUpload extends FileUpload
     /** @var array<ImageFormat>|null */
     protected ?array $imageFormats = null;
 
-    /**
-     * JSON strings of the files present in DB when the form was hydrated.
-     * Used to defer deletion until the form is actually saved.
-     *
-     * @var string[]
-     */
-    protected array $originalFiles = [];
-
-    public function setOriginalFiles(array $files): void
-    {
-        $this->originalFiles = $files;
-    }
-
-    public function getOriginalFiles(): array
-    {
-        return $this->originalFiles;
-    }
-
     protected function setUp(): void
     {
         parent::setUp();
@@ -49,7 +31,6 @@ class MediaForgeFileUpload extends FileUpload
         $this->fetchFileInformation(false);
 
         // DB → internal: decode each stored array to a JSON string.
-        // Also snapshot the original files so deletion can be deferred to save time.
         $this->afterStateHydrated(static function (
             MediaForgeFileUpload $component,
             mixed $state,
@@ -70,12 +51,7 @@ class MediaForgeFileUpload extends FileUpload
                 }
             }
 
-            $normalized = array_values(array_filter($normalized));
-
-            // Store snapshot so dehydrateStateUsing can detect removals.
-            $component->setOriginalFiles($normalized);
-
-            $component->rawState($normalized);
+            $component->rawState(array_values(array_filter($normalized)));
         });
 
         // Upload: delegate to MediaForge, return JSON-encoded result.
@@ -123,42 +99,55 @@ class MediaForgeFileUpload extends FileUpload
         $this->deleteUploadedFileUsing(static function (): void {});
 
         // Internal → DB: decode JSON strings back to arrays.
-        // This is also where deferred deletions are performed:
-        // any file present in the original hydrated state but absent from the current
-        // state is deleted here — i.e. only when the form is actually saved.
+        // Deferred deletions are performed here by comparing the new state against the
+        // current DB value (read via getRawOriginal), so files are only removed on save.
+        // This approach is reliable across Livewire requests, unlike in-memory snapshots.
         $this->dehydrateStateUsing(static function (MediaForgeFileUpload $component, mixed $state): ?array {
             $items = blank($state) ? [] : (is_array($state) ? array_values($state) : [$state]);
 
-            // Normalise current state items to JSON strings for comparison.
+            // Decode current state items to format-map arrays.
             $remaining = array_values(array_filter(array_map(
-                static fn (mixed $item): ?string => is_string($item)
-                    ? $item
-                    : (is_array($item) ? json_encode($item) : null),
-                $items,
-            )));
-
-            // Delete files that existed before but are no longer in the current state.
-            foreach ($component->getOriginalFiles() as $originalFile) {
-                if (!in_array($originalFile, $remaining, true)) {
-                    $metadata = json_decode($originalFile, true);
-                    if ($metadata) {
-                        app(MediaForge::class)->delete([$metadata]);
-                    }
-                }
-            }
-
-            if (blank($state)) {
-                return null;
-            }
-
-            $decoded = array_values(array_filter(array_map(
-                static fn (mixed $item): mixed => is_string($item)
+                static fn (mixed $item): ?array => is_string($item)
                     ? json_decode($item, true)
                     : (is_array($item) ? $item : null),
                 $items,
             )));
 
-            return !empty($decoded) ? $decoded : null;
+            // Build a list of default-format paths still present in the new state.
+            $remainingPaths = [];
+            foreach ($remaining as $formatMap) {
+                $entry = $formatMap['default'] ?? (is_array($formatMap) ? reset($formatMap) : null);
+                if (is_array($entry) && isset($entry['path'])) {
+                    $remainingPaths[] = $entry['path'];
+                }
+            }
+
+            // Read the pre-save DB value and delete any format map no longer referenced.
+            try {
+                $record = $component->getRecord();
+                if ($record !== null) {
+                    $dbRaw = $record->getRawOriginal($component->getName());
+                    if (filled($dbRaw)) {
+                        $dbItems = is_string($dbRaw) ? json_decode($dbRaw, true) : $dbRaw;
+                        if (is_array($dbItems)) {
+                            foreach ($dbItems as $dbItem) {
+                                if (!is_array($dbItem)) {
+                                    continue;
+                                }
+                                $dbEntry = $dbItem['default'] ?? (is_array($dbItem) ? reset($dbItem) : null);
+                                $dbPath  = is_array($dbEntry) ? ($dbEntry['path'] ?? null) : null;
+                                if ($dbPath !== null && !in_array($dbPath, $remainingPaths, true)) {
+                                    app(MediaForge::class)->delete([$dbItem]);
+                                }
+                            }
+                        }
+                    }
+                }
+            } catch (\Throwable) {
+                // Silently skip if the record or attribute is unavailable (e.g. CreateRecord).
+            }
+
+            return !empty($remaining) ? $remaining : null;
         });
     }
 
