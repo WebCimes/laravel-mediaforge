@@ -67,7 +67,7 @@ class MediaForge
             $imageDisk->makeDirectory($imageDirectory);
         }
 
-        $image = $this->imageManager->read($uploadedFile);
+        $image = $this->imageManager->decode($uploadedFile);
         $entry = [
             'disk' => $imageDiskName,
             'path' => $imageFilePath,
@@ -148,12 +148,11 @@ class MediaForge
             ) use ($textOptions) {
                 // Only set a custom font if one is configured; otherwise Intervention uses its built-in font
                 if (!empty($textOptions['font'])) {
-                    $font->filename($textOptions['font']);
+                    $font->filepath($textOptions['font']);
                 }
                 $font->size($textOptions['size']);
                 $font->color($textOptions['color']);
-                $font->align($textOptions['align']);
-                $font->valign($textOptions['valign']);
+                $font->align($textOptions['align'], $textOptions['valign']);
                 $font->angle($textOptions['angle']);
                 if (!empty($textOptions['wrap'])) {
                     $font->wrap($textOptions['wrap']);
@@ -168,16 +167,18 @@ class MediaForge
                     'position' => 'center',
                     'x' => 0,
                     'y' => 0,
-                    'opacity' => 75,
+                    'opacity' => 0.75,
                 ]),
                 $format->getWatermarkOptions(),
             );
 
-            $image->place(
+            // V4 signature: insert($image, $x, $y, $alignment, $transparency)
+            // transparency is 0.0–1.0, same as our opacity range.
+            $image->insert(
                 $format->getWatermark(),
-                $watermarkOptions['position'],
                 $watermarkOptions['x'],
                 $watermarkOptions['y'],
+                $watermarkOptions['position'],
                 $watermarkOptions['opacity'],
             );
         }
@@ -272,7 +273,7 @@ class MediaForge
             $sourceWidth = null;
             foreach ($formats as $format) {
                 if ($format->isSrcsetSkipLarger()) {
-                    $sourceWidth = $this->imageManager->read($uploadedFile)->width();
+                    $sourceWidth = $this->imageManager->decode($uploadedFile)->width();
                     break;
                 }
             }
@@ -423,7 +424,7 @@ class MediaForge
 
             // Read source first — this matters when regenerating 'default' itself,
             // as the source and destination may be the same file.
-            $image = $this->imageManager->read(
+            $image = $this->imageManager->decode(
                 $this->filesystem->disk($defaultDisk)->path($defaultPath),
             );
 
@@ -494,7 +495,7 @@ class MediaForge
                         $variantExtension;
                     $variantFilePath = $variantDirectory . '/' . $variantFileName;
 
-                    $variantImage = $this->imageManager->read(
+                    $variantImage = $this->imageManager->decode(
                         $this->filesystem->disk($defaultDisk)->path($defaultPath),
                     );
 

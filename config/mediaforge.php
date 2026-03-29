@@ -51,7 +51,7 @@ return [
         'position' => 'center',
         'x' => 0,
         'y' => 0,
-        'opacity' => 75,
+        'opacity' => 0.75,
     ],
 
     /*

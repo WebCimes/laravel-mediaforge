@@ -169,11 +169,11 @@ This produces the following structure (base format + nested `srcset` array + aut
 
 **Resize type inheritance** — each variant inherits the resize method configured on the format:
 
-| Configured on format | Variant behaviour |
-| -------------------- | ----------------- |
-| `cover(1000, 500)` | `cover(width, proportional_height)` — e.g. at 400w → `cover(400, 200)` |
-| `scaleDown(1920)` | `scaleDown(width)` — height auto-computed by Intervention |
-| *(none)* | falls back to `scaleDown(width)` — aspect ratio preserved, never upscales |
+| Configured on format | Variant behaviour                                                         |
+| -------------------- | ------------------------------------------------------------------------- |
+| `cover(1000, 500)`   | `cover(width, proportional_height)` — e.g. at 400w → `cover(400, 200)`    |
+| `scaleDown(1920)`    | `scaleDown(width)` — height auto-computed by Intervention                 |
+| _(none)_             | falls back to `scaleDown(width)` — aspect ratio preserved, never upscales |
 
 The **base format** (`hero`) always uses the dimensions you configured explicitly and is never filtered by `skipLarger`.
 
@@ -236,13 +236,12 @@ $srcset = collect($entry['hero']['srcset'])
 
 ```html
 <img
-    src="{{ Storage::disk($entry['hero']['disk'])->url($entry['hero']['path']) }}"
-    srcset="{{ $srcset }}"
-    sizes="100vw"
-    alt="{{ $entry['hero']['alt'] }}">
+  src="{{ Storage::disk($entry['hero']['disk'])->url($entry['hero']['path']) }}"
+  srcset="{{ $srcset }}"
+  sizes="100vw"
+  alt="{{ $entry['hero']['alt'] }}"
+/>
 ```
-
-
 
 `handleFiles()` is designed to process the payload emitted by a file input component in a single call: upload new files, delete removed ones, and apply a global ordering across both existing and new items.
 
@@ -406,7 +405,7 @@ return [
         'position' => 'center',
         'x' => 0,
         'y' => 0,
-        'opacity' => 75,
+        'opacity' => 0.75,
     ],
 
     // Srcset defaults. Used when calling ->srcset() with no explicit widths.
