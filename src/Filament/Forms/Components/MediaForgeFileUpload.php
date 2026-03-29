@@ -94,15 +94,24 @@ class MediaForgeFileUpload extends FileUpload
             ];
         });
 
-        // Deletion is intentionally deferred — actual file removal happens in dehydrateStateUsing
-        // only when the form is saved, so clicking the X button without saving leaves files intact.
-        $this->deleteUploadedFileUsing(static function (): void {});
+        // Deletion is deferred to save time: the file JSON is queued in the session,
+        // and actual disk removal happens in dehydrateStateUsing (on form save only).
+        $this->deleteUploadedFileUsing(static function (MediaForgeFileUpload $component, string $file): void {
+            $queueKey = 'mf_pdq_' . sha1($component->getStatePath() . '|' . ($component->getRecord()?->getKey() ?? ''));
+            $queue    = session()->get($queueKey, []);
+            if (!in_array($file, $queue, true)) {
+                $queue[] = $file;
+            }
+            session()->put($queueKey, $queue);
+        });
 
         // Internal → DB: decode JSON strings back to arrays.
-        // Deferred deletions are performed here by comparing the new state against the
-        // current DB value (read via getRawOriginal), so files are only removed on save.
-        // This approach is reliable across Livewire requests, unlike in-memory snapshots.
+        // Pending deletions (queued in session by deleteUploadedFileUsing above) are processed
+        // here, ensuring files are only removed from disk when the form is actually saved.
         $this->dehydrateStateUsing(static function (MediaForgeFileUpload $component, mixed $state): ?array {
+            $queueKey       = 'mf_pdq_' . sha1($component->getStatePath() . '|' . ($component->getRecord()?->getKey() ?? ''));
+            $pendingDeletions = session()->pull($queueKey, []);
+
             $items = blank($state) ? [] : (is_array($state) ? array_values($state) : [$state]);
 
             // Decode current state items to format-map arrays.
@@ -113,38 +122,27 @@ class MediaForgeFileUpload extends FileUpload
                 $items,
             )));
 
-            // Build a list of default-format paths still present in the new state.
-            $remainingPaths = [];
-            foreach ($remaining as $formatMap) {
-                $entry = $formatMap['default'] ?? (is_array($formatMap) ? reset($formatMap) : null);
-                if (is_array($entry) && isset($entry['path'])) {
-                    $remainingPaths[] = $entry['path'];
+            // Delete queued files and ensure they are absent from the saved state.
+            foreach ($pendingDeletions as $file) {
+                $metadata = json_decode($file, true);
+                if (!$metadata) {
+                    continue;
                 }
-            }
+                app(MediaForge::class)->delete([$metadata]);
 
-            // Read the pre-save DB value and delete any format map no longer referenced.
-            try {
-                $record = $component->getRecord();
-                if ($record !== null) {
-                    $dbRaw = $record->getRawOriginal($component->getName());
-                    if (filled($dbRaw)) {
-                        $dbItems = is_string($dbRaw) ? json_decode($dbRaw, true) : $dbRaw;
-                        if (is_array($dbItems)) {
-                            foreach ($dbItems as $dbItem) {
-                                if (!is_array($dbItem)) {
-                                    continue;
-                                }
-                                $dbEntry = $dbItem['default'] ?? (is_array($dbItem) ? reset($dbItem) : null);
-                                $dbPath  = is_array($dbEntry) ? ($dbEntry['path'] ?? null) : null;
-                                if ($dbPath !== null && !in_array($dbPath, $remainingPaths, true)) {
-                                    app(MediaForge::class)->delete([$dbItem]);
-                                }
-                            }
-                        }
-                    }
+                $pendingEntry = $metadata['default'] ?? (is_array($metadata) ? reset($metadata) : null);
+                $pendingPath  = is_array($pendingEntry) ? ($pendingEntry['path'] ?? null) : null;
+
+                if ($pendingPath !== null) {
+                    $remaining = array_values(array_filter(
+                        $remaining,
+                        static function (array $formatMap) use ($pendingPath): bool {
+                            $entry = $formatMap['default'] ?? (is_array($formatMap) ? reset($formatMap) : null);
+
+                            return !is_array($entry) || ($entry['path'] ?? null) !== $pendingPath;
+                        },
+                    ));
                 }
-            } catch (\Throwable) {
-                // Silently skip if the record or attribute is unavailable (e.g. CreateRecord).
             }
 
             return !empty($remaining) ? $remaining : null;
