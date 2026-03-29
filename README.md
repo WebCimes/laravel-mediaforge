@@ -16,6 +16,7 @@ Powered by [Intervention Image](https://image.intervention.io/v3), this Laravel 
 - [Handle files (upload + delete + reorder in one call)](#handle-files-upload--delete--reorder-in-one-call)
 - [Regenerate a format](#regenerate-a-format)
 - [Delete files](#delete-files)
+- [Auto-delete on model deletion](#auto-delete-on-model-deletion)
 - [Custom base name](#custom-base-name)
 - [Filament integration](#filament-integration)
 - [Configuration](#configuration)
@@ -304,6 +305,23 @@ $product->update(['cover' => $updated]);
 // Deletes all files referenced in the stored entry:
 MediaForge::delete($product->cover, 'public');
 ```
+
+## Auto-delete on model deletion
+
+Add the `HasMediaForge` trait to your model and declare which columns hold MediaForge data. When the model is permanently deleted, all referenced files are automatically removed from disk:
+
+```php
+use Webcimes\LaravelMediaforge\Traits\HasMediaForge;
+
+class Product extends Model
+{
+    use HasMediaForge;
+
+    protected array $mediaForgeColumns = ['cover', 'images'];
+}
+```
+
+**Soft-delete aware** — if your model uses `SoftDeletes`, files are preserved on a regular `->delete()` (so a restored record still has its files) and only deleted on `->forceDelete()`.
 
 ## Custom base name
 
