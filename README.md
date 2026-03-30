@@ -308,7 +308,7 @@ MediaForge::delete($product->cover, 'public');
 
 ## Auto-delete on model deletion
 
-Add the `HasMediaForge` trait to your model and declare which columns hold MediaForge data. When the model is permanently deleted, all referenced files are automatically removed from disk:
+Add the `HasMediaForge` trait to your model and declare which columns (or nested paths) hold MediaForge data. When the model is permanently deleted, all referenced files are automatically removed from disk:
 
 ```php
 use Webcimes\LaravelMediaforge\Traits\HasMediaForge;
@@ -317,7 +317,20 @@ class Product extends Model
 {
     use HasMediaForge;
 
-    protected array $mediaForgeColumns = ['cover', 'images'];
+    protected array $mediaForgeColumns = [
+        // Direct column
+        'cover',
+
+        // Multiple-upload column (array of format maps)
+        'images',
+
+        // Nested inside a JSON column (e.g. content = ['hero' => ['image' => [formatMap]]])
+        'content.hero.image',
+
+        // Repeater with wildcard — deletes the image from every item in the array
+        // (e.g. content = ['slides' => [['image' => [formatMap]], ['image' => [formatMap]]]])
+        'content.slides.*.image',
+    ];
 }
 ```
 
