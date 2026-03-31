@@ -13,7 +13,7 @@ return [
     | 'vips'    — Fastest, lowest memory, but rarely available on shared hosting.
     |             Requires: composer require intervention/image-driver-vips
     */
-    'driver' => env('FILE_SERVICE_DRIVER', 'gd'), // switch to 'imagick' if available on your server
+    'driver' => 'gd', // switch to 'imagick' if available on your server
 
     /*
     |--------------------------------------------------------------------------
