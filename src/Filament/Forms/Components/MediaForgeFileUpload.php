@@ -4,6 +4,7 @@ namespace Webcimes\LaravelMediaforge\Filament\Forms\Components;
 
 use Closure;
 use Filament\Forms\Components\FileUpload;
+use Filament\Schemas\Components\StateCasts\FileUploadStateCast;
 use Illuminate\Support\Facades\Storage;
 use Livewire\Features\SupportFileUploads\TemporaryUploadedFile;
 use Webcimes\LaravelMediaforge\ImageFormat;
@@ -37,17 +38,18 @@ class MediaForgeFileUpload extends FileUpload
             MediaForgeFileUpload $component,
             mixed $state,
         ): void {
-            if (blank($state)) {
-                $component->rawState([]);
-
-                return;
-            }
-
-            if ($component->isMultiple()) {
-                $items = is_array($state) ? $state : [];
-            } else {
-                $items = [$state];
-            }
+            // Normalize the state into a list of items independently of `multiple()`:
+            // - a list of JSON strings / format-maps stays as-is,
+            // - a single JSON string or a single associative format-map is wrapped as one item.
+            // This avoids iterating over the keys of a single format-map, which would
+            // produce malformed entries (the inner variants, not the format-map).
+            $items = match (true) {
+                blank($state) => [],
+                is_string($state) => [$state],
+                is_array($state) && array_is_list($state) => $state,
+                is_array($state) => [$state],
+                default => [],
+            };
 
             $normalized = [];
 
@@ -120,13 +122,18 @@ class MediaForgeFileUpload extends FileUpload
             $queueKey       = 'mf_pdq_' . sha1($component->getStatePath() . '|' . ($component->getRecord()?->getKey() ?? ''));
             $pendingDeletions = session()->pull($queueKey, []);
 
-            // In single mode, the state IS one format-map (associative array) and must not be
-            // iterated as a list of items — doing so would strip the 'default'/'thumb' keys.
-            $items = blank($state) ? [] : (
-                $component->isMultiple() && is_array($state) && array_is_list($state)
-                    ? array_values($state)
-                    : [$state]
-            );
+            // Normalize the state into a list of items independently of `multiple()`:
+            // - a list of JSON strings / format-maps stays as-is,
+            // - a single JSON string or a single associative format-map is wrapped as one item.
+            // This prevents `array_values()` from stripping the 'default'/'thumb' keys of a
+            // single format-map (which would silently corrupt the stored structure).
+            $items = match (true) {
+                blank($state) => [],
+                is_string($state) => [$state],
+                is_array($state) && array_is_list($state) => array_values($state),
+                is_array($state) => [$state],
+                default => [$state],
+            };
 
             // Decode current state items to format-map arrays.
             $remaining = array_values(array_filter(array_map(
@@ -166,6 +173,27 @@ class MediaForgeFileUpload extends FileUpload
             // Multiple: return the full list. Single: return the first format-map directly.
             return $component->isMultiple() ? $remaining : $remaining[0];
         });
+    }
+
+    /**
+     * Replace Filament's default FileUploadStateCast with our own.
+     *
+     * The default cast's `get()` calls `Arr::first()` in single mode, which
+     * unwraps a format-map (e.g. ['default' => [...]] → ['disk' => ...]) and
+     * corrupts the structure. Our cast preserves the format-map wrapper.
+     *
+     * @return array<mixed>
+     */
+    public function getDefaultStateCasts(): array
+    {
+        $casts = array_filter(
+            parent::getDefaultStateCasts(),
+            static fn ($cast): bool => !($cast instanceof FileUploadStateCast),
+        );
+
+        $casts[] = app(MediaForgeStateCast::class, ['isMultiple' => $this->isMultiple()]);
+
+        return array_values($casts);
     }
 
     /**
