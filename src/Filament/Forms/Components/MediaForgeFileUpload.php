@@ -31,19 +31,27 @@ class MediaForgeFileUpload extends FileUpload
         $this->fetchFileInformation(false);
 
         // DB → internal: decode each stored array to a JSON string.
+        // Multiple: state is a list of items (arrays or JSON strings).
+        // Single: state is a single item (a format-map array or a JSON string).
         $this->afterStateHydrated(static function (
             MediaForgeFileUpload $component,
             mixed $state,
         ): void {
-            if (blank($state) || !is_array($state)) {
+            if (blank($state)) {
                 $component->rawState([]);
 
                 return;
             }
 
+            if ($component->isMultiple()) {
+                $items = is_array($state) ? $state : [];
+            } else {
+                $items = [$state];
+            }
+
             $normalized = [];
 
-            foreach ($state as $item) {
+            foreach ($items as $item) {
                 if (is_array($item)) {
                     $normalized[] = json_encode($item);
                 } elseif (is_string($item) && filled($item)) {
@@ -145,7 +153,12 @@ class MediaForgeFileUpload extends FileUpload
                 }
             }
 
-            return !empty($remaining) ? $remaining : null;
+            if (empty($remaining)) {
+                return null;
+            }
+
+            // Multiple: return the full list. Single: return the first format-map directly.
+            return $component->isMultiple() ? $remaining : $remaining[0];
         });
     }
 
