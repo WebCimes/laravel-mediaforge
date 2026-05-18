@@ -120,7 +120,13 @@ class MediaForgeFileUpload extends FileUpload
             $queueKey       = 'mf_pdq_' . sha1($component->getStatePath() . '|' . ($component->getRecord()?->getKey() ?? ''));
             $pendingDeletions = session()->pull($queueKey, []);
 
-            $items = blank($state) ? [] : (is_array($state) ? array_values($state) : [$state]);
+            // In single mode, the state IS one format-map (associative array) and must not be
+            // iterated as a list of items — doing so would strip the 'default'/'thumb' keys.
+            $items = blank($state) ? [] : (
+                $component->isMultiple() && is_array($state) && array_is_list($state)
+                    ? array_values($state)
+                    : [$state]
+            );
 
             // Decode current state items to format-map arrays.
             $remaining = array_values(array_filter(array_map(
