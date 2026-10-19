@@ -269,6 +269,28 @@ class MediaForgeTest extends TestCase
         $this->disk->assertMissing($entry['thumb']['path']);
     }
 
+    public function test_delete_accepts_a_single_format_map(): void
+    {
+        // A single upload stores one format map (not a list): delete() must accept it as is
+        $file = UploadedFile::fake()->image('single.jpg', 500, 500);
+
+        $entry = $this->fileService->upload($file, 'public', 'uploads', [
+            ImageFormat::make('default')->srcset([200]),
+            ImageFormat::make('thumb')->cover(100, 100),
+        ]);
+
+        $this->disk->assertExists($entry['default']['path']);
+
+        $this->fileService->delete($entry, 'public');
+
+        $this->disk->assertMissing($entry['default']['path']);
+        $this->disk->assertMissing($entry['thumb']['path']);
+        foreach ($entry['default']['srcset'] ?? [] as $variant) {
+            $this->disk->assertMissing($variant['path']);
+        }
+        $this->disk->assertDirectoryEmpty('uploads');
+    }
+
     public function test_delete_removes_image_folder_when_empty(): void
     {
         $file = UploadedFile::fake()->image('folder_cleanup.jpg', 500, 500);

@@ -302,8 +302,10 @@ $product->update(['cover' => $updated]);
 ## Delete files
 
 ```php
-// Deletes all files referenced in the stored entry:
+// Deletes all files referenced in the stored entry (formats and srcset variants),
+// a single upload (format map) as well as a multiple one (list of format maps):
 MediaForge::delete($product->cover, 'public');
+MediaForge::delete($product->gallery, 'public');
 ```
 
 ## Auto-delete on model deletion

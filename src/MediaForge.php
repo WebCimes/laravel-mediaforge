@@ -530,6 +530,24 @@ class MediaForge
      * 'hero_01jq8z...' or just '01jq8z...'. This is the reliable signal that the
      * directory was generated here and can be cleaned up, regardless of base path depth.
      */
+    /**
+     * Whether a value is a single format map: named formats, each one a stored entry ('disk' + 'path').
+     */
+    private function isFormatMap(array $value): bool
+    {
+        if ($value === [] || array_is_list($value)) {
+            return false;
+        }
+
+        foreach ($value as $entry) {
+            if (!is_array($entry) || !isset($entry['disk'], $entry['path'])) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
     private function deleteImageFolderIfEmpty(string $diskName, string $dir): void
     {
         if (!preg_match('/(?:^|_)[0-9a-z]{26}$/', basename($dir))) {
@@ -548,12 +566,19 @@ class MediaForge
      *   - string: single file path
      *   - array of strings: multiple file paths
      *   - associative array with 'disk' and 'path' keys (format entry structure)
+     *   - a single format map (['default' => [...], 'thumb' => [...]], as stored by a single upload)
+     *   - a list of format maps (as stored by a multiple upload)
      * @param  string  $diskName  Only used when $filesToDelete is a plain string/string[].
      */
     public function delete(array|string|null $filesToDelete, string $diskName = 'public'): void
     {
         if (!$filesToDelete) {
             return;
+        }
+
+        // A single format map is deleted like a list holding it (HasMediaForge passes single uploads as is)
+        if (is_array($filesToDelete) && $this->isFormatMap($filesToDelete)) {
+            $filesToDelete = [$filesToDelete];
         }
 
         if (is_array($filesToDelete)) {
