@@ -332,8 +332,9 @@ class ImageFormat
      *     ->implode(', ');
      * ```
      *
-     * Variants wider than the source are skipped by default (`$skipLarger = true`) — no file is
-     * written and no entry is stored for those widths. The `default` format always serves as
+     * Variants wider than the base format output are skipped by default (`$skipLarger = true`) — no
+     * file is written and no entry is stored for those widths. The base output is the source once the
+     * format transforms are applied: with `scaleDown(1600, 1200)` on a 3000px photo, nothing above 1600. The `default` format always serves as
      * fallback in the `src` attribute:
      * ```php
      * <img src="{{ Storage::disk($entry['default']['disk'])->url($entry['default']['path']) }}"
@@ -343,7 +344,7 @@ class ImageFormat
      *
      * @param int[]|null $widths      List of target widths in pixels. When `null` (or omitted),
      *                                 the widths defined in `config('mediaforge.srcset.widths')` are used.
-     * @param bool       $skipLarger  Skip variants whose target width exceeds the source image width.
+     * @param bool       $skipLarger  Skip variants whose target width exceeds the base format output width.
      *                                Defaults to `true`. Set to `false` to always write all variants.
      */
     public function srcset(?array $widths = null, bool $skipLarger = true): static

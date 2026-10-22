@@ -269,15 +269,6 @@ class MediaForge
 
             $result = [];
 
-            // Read source dimensions once if any format uses skipLarger
-            $sourceWidth = null;
-            foreach ($formats as $format) {
-                if ($format->isSrcsetSkipLarger()) {
-                    $sourceWidth = $this->imageManager->decode($uploadedFile)->width();
-                    break;
-                }
-            }
-
             foreach ($formats as $formatName => $format) {
                 if ($format->isSrcset()) {
                     // Process the base format (original dimensions / base transforms)
@@ -296,7 +287,9 @@ class MediaForge
                     // Process each srcset width variant and nest under 'srcset'
                     $srcsetEntries = [];
                     foreach ($format->getSrcsetWidths() as $width) {
-                        if ($format->isSrcsetSkipLarger() && $sourceWidth !== null && $width > $sourceWidth) {
+                        // Compared with the base output, not the source: a variant must never exceed
+                        // the base format bounds (e.g. scaleDown(1600, 1200) on a 3000px photo)
+                        if ($format->isSrcsetSkipLarger() && $width > $entry['width']) {
                             continue;
                         }
                         $variantFormat = $format->expandForSrcset($width);
@@ -483,6 +476,10 @@ class MediaForge
 
                 $srcsetEntries = [];
                 foreach ($format->getSrcsetWidths() as $width) {
+                    // Same rule as upload(): no variant wider than the regenerated base
+                    if ($format->isSrcsetSkipLarger() && $width > $entry['width']) {
+                        continue;
+                    }
                     $variantFormat = $format->expandForSrcset($width);
                     $variantDiskName = $variantFormat->getDisk() ?? $defaultDisk;
                     $variantDisk = $this->filesystem->disk($variantDiskName);

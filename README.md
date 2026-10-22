@@ -209,11 +209,14 @@ ImageFormat::make('og')
 // Generates: og (1200×630) with srcset: [600×315]
 ```
 
-**`skipLarger`** (default `true`) — variants whose target width exceeds the source image width are skipped (no file written, no entry created). The base format is never filtered.
+**`skipLarger`** (default `true`) — variants whose target width exceeds the base format output are skipped (no file written, no entry created). The base output is the source once the format transforms are applied, so a variant never goes beyond the format bounds. The base format is never filtered.
 
 ```php
 // Default — source 600px wide: srcset contains only hero_480w
 ImageFormat::make('hero')->srcset([1920, 1080, 720, 480])->extension('webp');
+
+// Default — source 3000px wide, base capped at 1600: srcset contains 1440w and smaller, never 1920w
+ImageFormat::make('photo')->scaleDown(1600, 1200)->srcset([1920, 1440, 1024])->extension('webp');
 
 // skipLarger: false — all four variants are written (scaleDown caps them at source width)
 ImageFormat::make('hero')->srcset([1920, 1080, 720, 480], skipLarger: false)->extension('webp');

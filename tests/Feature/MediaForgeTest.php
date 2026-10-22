@@ -1098,6 +1098,49 @@ class MediaForgeTest extends TestCase
         $this->disk->assertExists($result['hero']['srcset'][0]['path']);
     }
 
+    public function test_upload_srcset_skip_larger_omits_variants_wider_than_base_format(): void
+    {
+        // Source is 3000px wide but the base is capped at 1600: the 1920 variant would exceed the format
+        $file = UploadedFile::fake()->image('img.jpg', 3000, 2000);
+
+        $result = $this->fileService->upload($file, 'public', 'uploads', [
+            ImageFormat::make('photo')->scaleDown(1600, 1200)->srcset([1920, 1440, 480])->extension('webp'),
+        ]);
+
+        $this->assertSame(1600, $result['photo']['width']);
+        $this->assertSame([1440, 480], array_column($result['photo']['srcset'], 'width'));
+    }
+
+    public function test_upload_srcset_skip_larger_uses_base_output_width_not_format_bounds(): void
+    {
+        // Tall source: scaleDown(2560, 1920) gives 1440×1920, so only the 1440 and 768 targets are kept
+        // (each variant keeps the format bounds ratio, hence narrower files for this portrait photo)
+        $file = UploadedFile::fake()->image('img.jpg', 3000, 4000);
+
+        $result = $this->fileService->upload($file, 'public', 'uploads', [
+            ImageFormat::make('hero')->scaleDown(2560, 1920)->srcset([2560, 1920, 1440, 768])->extension('webp'),
+        ]);
+
+        $this->assertSame(1440, $result['hero']['width']);
+        $this->assertSame(
+            ['hero_1440w.webp', 'hero_768w.webp'],
+            array_map('basename', array_column($result['hero']['srcset'], 'path')),
+        );
+    }
+
+    public function test_regenerate_srcset_skip_larger_omits_variants_wider_than_base_format(): void
+    {
+        $file = UploadedFile::fake()->image('img.jpg', 3000, 2000);
+        $stored = $this->fileService->upload($file, 'public', 'uploads');
+
+        $result = $this->fileService->regenerate($stored, [
+            ImageFormat::make('photo')->scaleDown(1600, 1200)->srcset([1920, 1440, 480])->extension('webp'),
+        ]);
+
+        $this->assertSame(1600, $result['photo']['width']);
+        $this->assertSame([1440, 480], array_column($result['photo']['srcset'], 'width'));
+    }
+
     public function test_upload_srcset_without_skip_larger_creates_all_variants(): void
     {
         $file = UploadedFile::fake()->image('img.jpg', 600, 400);
