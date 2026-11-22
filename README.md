@@ -457,6 +457,14 @@ return [
 ];
 ```
 
+## Other WebCimes projects
+
+- [WebCimes Modal](https://github.com/WebCimes/webcimes-modal) — Modals and confirmations
+- [WebCimes Cookies](https://github.com/WebCimes/webcimes-cookies) — Cookie consent
+- [WebCimes Select](https://github.com/WebCimes/webcimes-select) — Searchable select fields
+- [WebCimes Tooltip](https://github.com/WebCimes/webcimes-tooltip) — Tooltips and popovers
+- [WebCimes Dark Theme](https://github.com/WebCimes/webcimes-dark-theme) — VS Code color theme
+
 ## License
 
 MIT
