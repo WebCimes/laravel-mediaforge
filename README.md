@@ -468,3 +468,7 @@ return [
 ## License
 
 MIT
+
+## Releasing
+
+Set `extra.release-version` in `composer.json` and commit it with the release changes. Run `make push`, then `make tag` to create and push the Git tag read from the committed manifest. Packagist uses that tag as the package version.
