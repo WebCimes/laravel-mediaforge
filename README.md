@@ -1,8 +1,12 @@
 # webcimes/laravel-mediaforge
 
+<img src="./demo/laravel-mediaforge-logo.png" width="96" height="96" alt="Laravel MediaForge logo" />
+
+[See the image processing examples](https://webcimes.github.io/laravel-mediaforge/)
+
 Store images and files directly in your existing model columns — no separate media library table required.
 
-Powered by [Intervention Image](https://image.intervention.io/v3), this Laravel package lets you upload a file once and automatically generate multiple formats (thumbnail, WebP, watermark, etc.), each saved as a structured entry you can store in any JSON/text column of your choosing.
+Powered by [Intervention Image](https://image.intervention.io/v4), this Laravel package lets you upload a file once and automatically generate multiple formats (thumbnail, WebP, watermark, etc.), each saved as a structured entry you can store in any JSON/text column of your choosing.
 
 ## Table of contents
 
@@ -45,9 +49,9 @@ Most media libraries (like Spatie Media Library) introduce a dedicated `media` t
 
 ## Requirements
 
-- PHP 8.2+
+- PHP 8.3+
 - Laravel 11, 12, or 13
-- Intervention Image 3.x — requires either the **GD** or **Imagick** PHP extension
+- Intervention Image 4.x with a supported driver. Use **GD**, **Imagick**, or install the optional **libvips** driver.
 
 ## Installation
 
