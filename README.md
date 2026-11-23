@@ -471,4 +471,4 @@ MIT
 
 ## Releasing
 
-Set `extra.release-version` in `composer.json` and commit it with the release changes. Run `make push`, then `make tag` to create and push the Git tag read from the committed manifest. Packagist uses that tag as the package version.
+Set `extra.release-version` in `composer.json` and commit it with the release changes on `main`. Run `make pack` to inspect the ZIP of the committed sources in `dist/`, or `make release` to create the archive, push `main`, and push the version tag. Packagist uses that tag as the package version.
